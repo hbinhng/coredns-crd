@@ -38,11 +38,12 @@ metadata:
     k8s-app: kube-dns
     kubernetes.io/name: CoreDNS
 spec:
-  replicas: 1
+  replicas: 2
   strategy:
     type: RollingUpdate
     rollingUpdate:
       maxUnavailable: 1
+      maxSurge: 1
   selector:
     matchLabels:
       k8s-app: kube-dns
@@ -53,6 +54,13 @@ spec:
     spec:
       priorityClassName: system-cluster-critical
       serviceAccountName: coredns-crd
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              k8s-app: kube-dns
       tolerations:
         - key: "CriticalAddonsOnly"
           operator: "Exists"
@@ -72,6 +80,11 @@ spec:
               cpu: 100m
               memory: 70Mi
           args: ["-conf", "/etc/coredns/Corefile"]
+          env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
           volumeMounts:
             - name: config-volume
               mountPath: /etc/coredns
