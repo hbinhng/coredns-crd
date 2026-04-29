@@ -101,3 +101,31 @@ for series in \
   grep -q "$series" <<<"$METRICS_OUT" || { echo "missing series: $series"; exit 1; }
 done
 echo "all 8 coredns_crd_* series present"
+
+phase "Scenario 4: Conflict"
+kubectl apply -f test/e2e/conflict-slice.yaml
+
+# Wait for the loser slice's Conflicting condition to flip True (≤10s).
+COND=""
+for i in $(seq 1 10); do
+  COND=$(kubectl get dnsslice e2e-loser \
+    -o jsonpath='{.status.conditions[?(@.type=="Conflicting")].status}' 2>/dev/null || true)
+  [[ "$COND" == "True" ]] && break
+  sleep 1
+done
+if [[ "$COND" != "True" ]]; then
+  echo "loser never marked Conflicting (got '$COND')"
+  exit 1
+fi
+echo "loser correctly marked Conflicting=True"
+
+# A ConflictDetected Event must exist for the loser.
+EVENTS=$(kubectl get events --field-selector involvedObject.name=e2e-loser \
+  -o jsonpath='{range .items[*]}{.reason}{"\n"}{end}')
+grep -q ConflictDetected <<<"$EVENTS" || {
+  echo "ConflictDetected Event missing"
+  echo "events:"
+  echo "$EVENTS"
+  exit 1
+}
+echo "ConflictDetected Event observed"
