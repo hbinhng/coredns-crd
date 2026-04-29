@@ -72,3 +72,32 @@ grep -q 'web.example.com.' <<<"$DIG_OUT" || { echo "missing CNAME target"; exit 
 grep -q 'v=spf1 -all'      <<<"$DIG_OUT" || { echo "missing TXT"; exit 1; }
 grep -q '10 100 80'        <<<"$DIG_OUT" || { echo "missing SRV"; exit 1; }
 echo "all five record types resolved correctly"
+
+phase "Scenario 3: Metrics"
+LEADER_IP=$(kubectl -n kube-system get pods -l app.kubernetes.io/name=coredns-crd \
+  --field-selector=status.phase=Running \
+  -o jsonpath='{.items[0].status.podIP}')
+echo "scraping http://$LEADER_IP:9153/metrics"
+
+kubectl run metrics --image=curlimages/curl:8.10.1 --restart=Never \
+  --command -- curl -s "http://$LEADER_IP:9153/metrics"
+for i in $(seq 1 30); do
+  PHASE=$(kubectl get pod metrics -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
+  sleep 1
+done
+METRICS_OUT=$(kubectl logs metrics 2>/dev/null)
+kubectl delete pod metrics --wait=false 2>/dev/null || true
+
+for series in \
+  '^coredns_crd_lookups_total' \
+  '^coredns_crd_index_records' \
+  '^coredns_crd_index_slices' \
+  '^coredns_crd_active_conflicts' \
+  '^coredns_crd_is_leader' \
+  '^coredns_crd_status_patches_total' \
+  '^coredns_crd_applies_total' \
+  '^coredns_crd_conflict_transitions_total'; do
+  grep -q "$series" <<<"$METRICS_OUT" || { echo "missing series: $series"; exit 1; }
+done
+echo "all 8 coredns_crd_* series present"
