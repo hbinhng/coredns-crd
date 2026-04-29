@@ -1,0 +1,26 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "coredns-crd.fullname" . }}
+  labels: {{- include "coredns-crd.labels" . | nindent 4 }}
+rules:
+  # crd plugin
+  - apiGroups: ["dns.coredns-crd.io"]
+    resources: ["dnsslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dns.coredns-crd.io"]
+    resources: ["dnsslices/status"]
+    verbs: ["get", "patch", "update"]
+  {{- if .Values.corefile.kubernetes.enabled }}
+  # kubernetes plugin
+  - apiGroups: [""]
+    resources: ["endpoints", "services", "pods", "namespaces"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "watch"]
+  {{- end }}
+  # Conflict transition Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]

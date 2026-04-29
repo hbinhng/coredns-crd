@@ -20,7 +20,6 @@ helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | 
 {{ include "coredns-crd.selectorLabels" . }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
-k8s-app: kube-dns
 kubernetes.io/name: CoreDNS
 {{- end -}}
 
