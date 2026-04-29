@@ -3,6 +3,7 @@ package crd
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/coredns/caddy"
@@ -14,9 +15,12 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+
+	"github.com/hbinhng/coredns-crd/internal/leader"
 )
 
 const pluginName = "crd"
@@ -64,9 +68,18 @@ func setup(c *caddy.Controller) error {
 	if err != nil {
 		return plugin.Error(pluginName, fmt.Errorf("dynamic client: %w", err))
 	}
+	clientset, err := kubernetes.NewForConfig(rc)
+	if err != nil {
+		return plugin.Error(pluginName, fmt.Errorf("typed clientset: %w", err))
+	}
 
 	h := New(cfg)
-	h.statusUpdater = NewStatusUpdater(dyn, nil)
+
+	isLeader, elector, err := buildLeaderElection(cfg.LeaderElection, clientset, h)
+	if err != nil {
+		return plugin.Error(pluginName, err)
+	}
+	h.statusUpdater = NewStatusUpdater(dyn, isLeader)
 
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, cfg.ResyncPeriod)
 	informer := factory.ForResource(dnsSliceGVR).Informer()
@@ -78,6 +91,9 @@ func setup(c *caddy.Controller) error {
 		ctx, cancel := context.WithCancel(context.Background())
 		h.cancel = cancel
 		go h.statusUpdater.Run(ctx)
+		if elector != nil {
+			go elector.Run(ctx)
+		}
 		factory.Start(ctx.Done())
 		if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
 			return fmt.Errorf("crd: failed to sync DNSSlice cache")
@@ -170,6 +186,74 @@ func parseLeaderElection(c *caddy.Controller, le *LeaderElectionConfig) error {
 		}
 	}
 	return c.EOFErr()
+}
+
+// buildLeaderElection returns the predicate the statusUpdater consults plus
+// (optionally) the Elector to be Run by setup. When leader election is
+// disabled the predicate is constant-true and the Elector is nil.
+func buildLeaderElection(cfg LeaderElectionConfig, clientset kubernetes.Interface, h *Handler) (func() bool, *leader.Elector, error) {
+	if cfg.Disabled {
+		log.Warning("leader election disabled; every replica will write status (race-prone)")
+		return alwaysLeader, nil, nil
+	}
+	ns := cfg.Namespace
+	if ns == "" {
+		ns = os.Getenv("POD_NAMESPACE")
+	}
+	if ns == "" {
+		ns = "kube-system"
+	}
+	name := cfg.LeaseName
+	if name == "" {
+		name = "coredns-crd-leader"
+	}
+	identity, _ := os.Hostname()
+	if identity == "" {
+		identity = "coredns-crd"
+	}
+	onStarted, onStopped, onNew := leaderCallbacks(h)
+	elector, err := leader.New(leader.Config{
+		Client:           clientset,
+		LeaseNamespace:   ns,
+		LeaseName:        name,
+		Identity:         identity,
+		OnStartedLeading: onStarted,
+		OnStoppedLeading: onStopped,
+		OnNewLeader:      onNew,
+	})
+	if err != nil {
+		return nil, nil, fmt.Errorf("build leader elector: %w", err)
+	}
+	return elector.IsLeader, elector, nil
+}
+
+func alwaysLeader() bool { return true }
+
+// leaderCallbacks returns the three callback closures wired into the elector.
+// Extracted as a separate function so each closure is unit-testable without
+// running real leader election.
+//
+// Note on ordering: OnStartedLeading may fire before the informer cache has
+// finished syncing on a cold start. reconcileAll then iterates an empty
+// Index and publishes nothing — the subsequent informer Add events trigger
+// applySlice → status enqueues anyway, so the only cost is a wasted reconcile
+// pass. Not a correctness issue.
+func leaderCallbacks(h *Handler) (
+	onStarted func(context.Context),
+	onStopped func(),
+	onNew func(string),
+) {
+	onStarted = func(ctx context.Context) {
+		log.Info("acquired leadership; reconciling all DNSSlices")
+		h.reconcileAll()
+	}
+	onStopped = func() {
+		log.Info("lost leadership; status writes paused")
+	}
+	onNew = func(id string) {
+		log.Infof("current leader: %s", id)
+	}
+	return
 }
 
 func loadRESTConfig(kubeconfig string) (*rest.Config, error) {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/coredns/caddy"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 // ---------- parseConfig ----------
@@ -396,4 +397,100 @@ func TestParseConfig_LeaderElection_Errors(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ---------- buildLeaderElection ----------
+
+func TestBuildLeaderElection_Disabled(t *testing.T) {
+	pred, elector, err := buildLeaderElection(
+		LeaderElectionConfig{Disabled: true},
+		fake.NewSimpleClientset(),
+		New(&config{}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elector != nil {
+		t.Errorf("expected nil elector when disabled, got %v", elector)
+	}
+	if !pred() {
+		t.Errorf("predicate should be constant-true when disabled")
+	}
+}
+
+func TestBuildLeaderElection_DefaultsFromEnv(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "from-env")
+	pred, elector, err := buildLeaderElection(
+		LeaderElectionConfig{},
+		fake.NewSimpleClientset(),
+		New(&config{}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elector == nil {
+		t.Fatal("expected non-nil elector")
+	}
+	if pred == nil {
+		t.Error("expected non-nil predicate")
+	}
+	// Predicate must be the elector's IsLeader (false before Run).
+	if pred() {
+		t.Errorf("predicate should be false before Run")
+	}
+}
+
+func TestBuildLeaderElection_DefaultsToKubeSystem(t *testing.T) {
+	t.Setenv("POD_NAMESPACE", "")
+	os.Unsetenv("POD_NAMESPACE")
+	_, elector, err := buildLeaderElection(
+		LeaderElectionConfig{},
+		fake.NewSimpleClientset(),
+		New(&config{}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elector == nil {
+		t.Fatal("expected non-nil elector")
+	}
+}
+
+func TestBuildLeaderElection_ExplicitValues(t *testing.T) {
+	_, elector, err := buildLeaderElection(
+		LeaderElectionConfig{Namespace: "ns", LeaseName: "name"},
+		fake.NewSimpleClientset(),
+		New(&config{}),
+	)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if elector == nil {
+		t.Fatal("expected non-nil elector")
+	}
+}
+
+func TestLeaderCallbacks_StartedTriggersReconcile(t *testing.T) {
+	h, su := newHandler(t)
+	h.applySlice(mkSlice("ns", "n", "u1", time.Unix(0, 0), 1, aRecord("foo.example.com.", "1.2.3.4")))
+	before := len(su.Calls())
+
+	onStarted, _, _ := leaderCallbacks(h)
+	onStarted(nil)
+
+	if got := len(su.Calls()) - before; got != 1 {
+		t.Errorf("OnStartedLeading should trigger reconcileAll; got %d enqueues", got)
+	}
+}
+
+func TestLeaderCallbacks_StoppedDoesNotPanic(t *testing.T) {
+	h, _ := newHandler(t)
+	_, onStopped, _ := leaderCallbacks(h)
+	onStopped() // logs only; must not panic
+}
+
+func TestLeaderCallbacks_NewLeaderDoesNotPanic(t *testing.T) {
+	h, _ := newHandler(t)
+	_, _, onNew := leaderCallbacks(h)
+	onNew("some-pod") // logs only; must not panic
 }
