@@ -36,5 +36,12 @@ Initial release.
   0% loss.
 - Tag-driven release pipeline: cosign-signed image and chart published
   to GHCR, GitHub Release with auto-generated notes.
+- File capability `cap_net_bind_service+ep` on `/coredns` so non-root
+  pods can bind privileged port 53 on container runtimes that don't
+  promote requested capabilities to the ambient set (KinD's containerd
+  default; necessary on Talos containerd 2.1.6 + kube-OVN as well).
+- Multi-node validation against a 3-CP Talos / kube-OVN cluster:
+  topology spread, cross-node DNS over Geneve overlay, cross-node
+  leader failover (~2 s), node-loss recovery (~14 s).
 
 [0.1.0]: https://github.com/hbinhng/coredns-crd/releases/tag/v0.1.0
