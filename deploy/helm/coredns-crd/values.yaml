@@ -84,6 +84,22 @@ topologySpreadConstraints:
   topologyKey: kubernetes.io/hostname
   whenUnsatisfiable: ScheduleAnyway
 
+networkPolicy:
+  # NetworkPolicy is enforced only by CNIs that implement it (Calico,
+  # Cilium, k3s with the network-policy controller). Vanilla flannel
+  # does NOT enforce. Opt in deliberately.
+  enabled: false
+  # Ingress sources allowed to scrape the metrics port. Empty list/null
+  # = no metrics ingress (Prometheus would be blocked). Default targets
+  # the kube-prometheus-stack convention: prometheus pods in `monitoring`.
+  metricsAllowedFrom:
+    - namespaceSelector:
+        matchLabels:
+          kubernetes.io/metadata.name: monitoring
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: prometheus
+
 tolerations:
   - key: CriticalAddonsOnly
     operator: Exists
