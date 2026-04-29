@@ -55,7 +55,7 @@ func setup(c *caddy.Controller) error {
 	}
 
 	h := New(cfg)
-	h.statusUpdater = NewStatusUpdater(dyn)
+	h.statusUpdater = NewStatusUpdater(dyn, nil)
 
 	factory := dynamicinformer.NewDynamicSharedInformerFactory(dyn, cfg.ResyncPeriod)
 	informer := factory.ForResource(dnsSliceGVR).Informer()

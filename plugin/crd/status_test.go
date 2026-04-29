@@ -217,7 +217,7 @@ func TestProcess_ApiError_Surfaces(t *testing.T) {
 
 func TestEnqueueDedupsByKey(t *testing.T) {
 	c, _ := newFakeDynamicClient()
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 
 	su.Enqueue("ns", "n", 1, index.UpsertResult{Won: []string{"a A"}})
 	su.Enqueue("ns", "n", 2, index.UpsertResult{Won: []string{"b A"}})
@@ -236,7 +236,7 @@ func TestEnqueueDedupsByKey(t *testing.T) {
 
 func TestTakeRemovesPending(t *testing.T) {
 	c, _ := newFakeDynamicClient()
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 	su.Enqueue("ns", "n", 1, index.UpsertResult{})
 
 	if _, ok := su.take("ns/n"); !ok {
@@ -251,7 +251,7 @@ func TestRestoreSurvivesNewerEnqueue(t *testing.T) {
 	// Exercise restore via the public Enqueue path (rather than direct map
 	// mutation) so the lock interleaving is the real production code path.
 	c, _ := newFakeDynamicClient()
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 
 	original := statusEvent{namespace: "ns", name: "n", generation: 1}
 	su.Enqueue("ns", "n", 5, index.UpsertResult{}) // newer enqueue first
@@ -267,7 +267,7 @@ func TestRestoreSurvivesNewerEnqueue(t *testing.T) {
 
 func TestRestoreInsertsWhenAbsent(t *testing.T) {
 	c, _ := newFakeDynamicClient()
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 	original := statusEvent{namespace: "ns", name: "n", generation: 1}
 	su.restore("ns/n", original)
 
@@ -285,7 +285,7 @@ func TestRun_DrainsAndPatches(t *testing.T) {
 	c, fake := newFakeDynamicClient()
 	captured := capturePatches(fake)
 
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 	su.Enqueue("ns", "a", 1, index.UpsertResult{Won: []string{"a A"}, LostTo: map[string]string{}})
 	su.Enqueue("ns", "b", 1, index.UpsertResult{Won: []string{"b A"}, LostTo: map[string]string{}})
 
@@ -298,13 +298,70 @@ func TestRun_DrainsAndPatches(t *testing.T) {
 	<-done
 }
 
+func TestRun_NotLeader_DoesNotPatch(t *testing.T) {
+	c, fake := newFakeDynamicClient()
+	captured := capturePatches(fake)
+
+	notLeader := func() bool { return false }
+	su := NewStatusUpdater(c, notLeader).(*statusUpdater)
+	su.Enqueue("ns", "n", 1, index.UpsertResult{LostTo: map[string]string{}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { su.Run(ctx); close(done) }()
+
+	// Wait until the run loop has cycled the key (queue will dedupe to len 0
+	// once Done has been called for it).
+	waitFor(t, time.Second, func() bool { return su.queue.Len() == 0 })
+	cancel()
+	<-done
+
+	if captured.len() != 0 {
+		t.Errorf("non-leader must not patch; got %d", captured.len())
+	}
+	su.mu.Lock()
+	pending := len(su.pending)
+	su.mu.Unlock()
+	if pending != 1 {
+		t.Errorf("non-leader must leave pending intact; got %d entries", pending)
+	}
+}
+
+func TestRun_LeaderToggle_DrainsAfterAcquire(t *testing.T) {
+	c, fake := newFakeDynamicClient()
+	captured := capturePatches(fake)
+
+	var leading atomic.Bool
+	su := NewStatusUpdater(c, leading.Load).(*statusUpdater)
+	su.Enqueue("ns", "n", 1, index.UpsertResult{LostTo: map[string]string{}})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { su.Run(ctx); close(done) }()
+
+	// Confirm no patch fires before becoming leader.
+	waitFor(t, time.Second, func() bool { return su.queue.Len() == 0 })
+	if captured.len() != 0 {
+		cancel()
+		<-done
+		t.Fatalf("expected 0 patches before leader, got %d", captured.len())
+	}
+
+	// Become leader; re-enqueue to wake the queue (key was Done'd).
+	leading.Store(true)
+	su.Enqueue("ns", "n", 1, index.UpsertResult{LostTo: map[string]string{}})
+	waitFor(t, 5*time.Second, func() bool { return captured.len() >= 1 })
+	cancel()
+	<-done
+}
+
 func TestRun_KeyWithoutPending_IsDoneAndContinues(t *testing.T) {
 	// Direct add to the queue without populating pending exercises the
 	// `take ok=false` branch (Done + continue, no patch).
 	c, fake := newFakeDynamicClient()
 	captured := capturePatches(fake)
 
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 	su.queue.Add("ns/orphan")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -350,7 +407,7 @@ func TestRun_RetriesOnPatchError(t *testing.T) {
 		return true, nil, nil
 	})
 
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 	su.Enqueue("ns", "n", 1, index.UpsertResult{LostTo: map[string]string{}})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -375,7 +432,7 @@ func TestEnqueueConcurrent_LastWriteRetained(t *testing.T) {
 	// serialization in production, so this is acceptable; this test pins the
 	// behavior so a future change is intentional.
 	c, _ := newFakeDynamicClient()
-	su := NewStatusUpdater(c).(*statusUpdater)
+	su := NewStatusUpdater(c, nil).(*statusUpdater)
 
 	const N = 100
 	var wg sync.WaitGroup

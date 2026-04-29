@@ -28,19 +28,27 @@ type StatusUpdater interface {
 }
 
 // statusUpdater dedupes per-slice status writes via a queue keyed by namespace/name,
-// with the latest payload held in a side map. The queue itself only carries comparable
-// keys; this is the standard pattern for storing rich state alongside a workqueue.
+// with the latest payload held in a side map. Run consults isLeader before each
+// patch so non-leader replicas leave pending entries intact for whoever is.
 type statusUpdater struct {
-	client dynamic.Interface
-	queue  workqueue.TypedRateLimitingInterface[string]
+	client   dynamic.Interface
+	isLeader func() bool
+	queue    workqueue.TypedRateLimitingInterface[string]
 
 	mu      sync.Mutex
 	pending map[string]statusEvent
 }
 
-func NewStatusUpdater(client dynamic.Interface) StatusUpdater {
+// NewStatusUpdater builds a StatusUpdater. isLeader gates whether Run actually
+// drains the queue; pass nil for the always-leader behavior used by single-
+// replica deployments and tests.
+func NewStatusUpdater(client dynamic.Interface, isLeader func() bool) StatusUpdater {
+	if isLeader == nil {
+		isLeader = func() bool { return true }
+	}
 	return &statusUpdater{
-		client: client,
+		client:   client,
+		isLeader: isLeader,
 		queue: workqueue.NewTypedRateLimitingQueue(
 			workqueue.DefaultTypedControllerRateLimiter[string](),
 		),
@@ -83,6 +91,19 @@ func (s *statusUpdater) restore(key string, ev statusEvent) {
 	}
 }
 
+// Run drains the workqueue, patching /status for the slice referenced by each
+// key. The loop is gated by isLeader: when false, keys are Done'd without
+// patching and pending entries remain in the side map.
+//
+// Leadership acquisition does NOT auto-drain. The caller is expected to
+// trigger a reconcile sweep on OnStartedLeading (Handler.reconcileAll
+// re-enqueues every known slice), which wakes the queue and unblocks
+// the side-map entries that were Done'd while we were not leader.
+//
+// If a leadership flip happens mid-process (after isLeader returned true
+// but before Patch returns), the in-flight write completes; the new leader
+// will overwrite it on its own reconcile sweep. Status patches are merge
+// patches and idempotent enough that this is safe.
 func (s *statusUpdater) Run(ctx context.Context) {
 	go func() {
 		<-ctx.Done()
@@ -92,6 +113,14 @@ func (s *statusUpdater) Run(ctx context.Context) {
 		key, shutdown := s.queue.Get()
 		if shutdown {
 			return
+		}
+		if !s.isLeader() {
+			// Not leader: leave the pending entry intact for whoever is, but
+			// Forget any rate-limiter state so a future leader doesn't inherit
+			// backoff accumulated under our previous leadership window.
+			s.queue.Forget(key)
+			s.queue.Done(key)
+			continue
 		}
 		ev, ok := s.take(key)
 		if !ok {
