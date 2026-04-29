@@ -123,6 +123,41 @@ func (i *Index) Lookup(qname string, qtype uint16) []dns.RR {
 	return out
 }
 
+// AllSnapshots returns the current outcome for every slice in the index,
+// sorted by namespace then name.
+func (i *Index) AllSnapshots() []SliceStatus {
+	i.mu.RLock()
+	out := make([]SliceStatus, 0, len(i.slices))
+	for sk := range i.slices {
+		snap, _ := i.snapshot(sk)
+		out = append(out, i.statusFor(sk, snap))
+	}
+	i.mu.RUnlock()
+	sortSliceStatuses(out)
+	return out
+}
+
+// statusFor assembles a SliceStatus for sk with the supplied result.
+// Caller must hold i.mu (read lock is sufficient).
+func (i *Index) statusFor(sk sliceKey, result UpsertResult) SliceStatus {
+	ns, name := splitKey(sk)
+	return SliceStatus{
+		Namespace:  ns,
+		Name:       name,
+		Generation: i.slices[sk].generation,
+		Result:     result,
+	}
+}
+
+func sortSliceStatuses(s []SliceStatus) {
+	sort.Slice(s, func(a, b int) bool {
+		if s[a].Namespace != s[b].Namespace {
+			return s[a].Namespace < s[b].Namespace
+		}
+		return s[a].Name < s[b].Name
+	})
+}
+
 func (i *Index) recompute(k recordKey) {
 	winner, rrs := i.resolveWinner(k)
 	if len(rrs) == 0 {
@@ -207,20 +242,9 @@ func (i *Index) diffSiblings(pre map[sliceKey]UpsertResult) []SliceStatus {
 		if !statusChanged(before, after) {
 			continue
 		}
-		ns, name := splitKey(sk)
-		out = append(out, SliceStatus{
-			Namespace:  ns,
-			Name:       name,
-			Generation: i.slices[sk].generation,
-			Result:     after,
-		})
+		out = append(out, i.statusFor(sk, after))
 	}
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].Namespace != out[b].Namespace {
-			return out[a].Namespace < out[b].Namespace
-		}
-		return out[a].Name < out[b].Name
-	})
+	sortSliceStatuses(out)
 	return out
 }
 

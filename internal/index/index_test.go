@@ -670,6 +670,82 @@ func TestSnapshot_UnknownSlice(t *testing.T) {
 	}
 }
 
+func TestAllSnapshots_Empty(t *testing.T) {
+	idx := New()
+	if got := idx.AllSnapshots(); len(got) != 0 {
+		t.Errorf("expected empty for fresh index, got %v", got)
+	}
+}
+
+func TestAllSnapshots_OrderedAndComplete(t *testing.T) {
+	// Three slices across two namespaces, inserted out of sort order.
+	// Asserts: every slice returned, sorted by (Namespace, Name), with
+	// generation propagated and Won/Lost reflecting per-slice ownership.
+	idx := New()
+	idx.Upsert(mkSlice("zeta", "z", "uz", t0(), 1, nil, a("z.example.com.", "1.1.1.1", nil)))
+	idx.Upsert(mkSlice("alpha", "b", "ub", t0(), 2, nil, a("b.example.com.", "1.1.1.1", nil)))
+	idx.Upsert(mkSlice("alpha", "a", "ua", t0(), 3, nil, a("a.example.com.", "1.1.1.1", nil)))
+
+	got := idx.AllSnapshots()
+	if len(got) != 3 {
+		t.Fatalf("expected 3 snapshots, got %d", len(got))
+	}
+	wantOrder := []string{"alpha/a", "alpha/b", "zeta/z"}
+	wantGen := map[string]int64{"alpha/a": 3, "alpha/b": 2, "zeta/z": 1}
+	for idx, s := range got {
+		key := s.Namespace + "/" + s.Name
+		if key != wantOrder[idx] {
+			t.Errorf("position %d: got %q want %q", idx, key, wantOrder[idx])
+		}
+		if s.Generation != wantGen[key] {
+			t.Errorf("%s: Generation=%d want %d", key, s.Generation, wantGen[key])
+		}
+		if len(s.Result.Won) != 1 {
+			t.Errorf("%s: expected 1 Won entry, got %v", key, s.Result.Won)
+		}
+	}
+}
+
+func TestAllSnapshots_ReflectsLWWState(t *testing.T) {
+	idx := New()
+	older := mkSlice("ns", "older", "u1", t0(), 1, nil, a("foo.example.com.", "1.1.1.1", nil))
+	newer := mkSlice("ns", "newer", "u2", t0().Add(time.Hour), 1, nil, a("foo.example.com.", "2.2.2.2", nil))
+	idx.Upsert(older)
+	idx.Upsert(newer)
+
+	snaps := idx.AllSnapshots()
+	byName := map[string]SliceStatus{}
+	for _, s := range snaps {
+		byName[s.Name] = s
+	}
+	if got := byName["older"].Result.Won; len(got) != 1 || got[0] != "foo.example.com. A" {
+		t.Errorf("older should have Won=[foo. A], got %v", got)
+	}
+	if got := byName["newer"].Result.Lost; len(got) != 1 || got[0] != "foo.example.com. A" {
+		t.Errorf("newer should have Lost=[foo. A], got %v", got)
+	}
+	if got := byName["newer"].Result.LostTo["foo.example.com. A"]; got != "ns/older" {
+		t.Errorf("newer should have LostTo[foo. A]=ns/older, got %q", got)
+	}
+}
+
+func TestAllSnapshots_PropagatesParseErrors(t *testing.T) {
+	idx := New()
+	// Slice with one valid + one invalid entry — parseSlice keeps the valid
+	// rr but reports the failure. AllSnapshots must surface the ParseErrors.
+	idx.Upsert(mkSlice("ns", "mixed", "u1", t0(), 1, nil,
+		a("good.example.com.", "1.2.3.4", nil),
+		a("bad.example.com.", "999.bad", nil),
+	))
+	got := idx.AllSnapshots()
+	if len(got) != 1 {
+		t.Fatalf("expected 1 snapshot, got %d", len(got))
+	}
+	if len(got[0].Result.ParseErrors) != 1 {
+		t.Errorf("expected 1 ParseError surfaced, got %v", got[0].Result.ParseErrors)
+	}
+}
+
 func TestUpsert_SiblingsSortedByNamespaceThenName(t *testing.T) {
 	idx := New()
 	// Three slices in three namespaces all losing to one new oldest entry.
