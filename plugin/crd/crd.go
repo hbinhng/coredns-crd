@@ -31,6 +31,21 @@ func New(cfg *config) *Handler {
 
 func (h *Handler) Name() string { return pluginName }
 
+// reconcileAll enqueues a fresh status snapshot for every slice in the index.
+// Wired to OnStartedLeading in setup.go: when this pod becomes leader, the
+// published /status surface converges to the current Index state regardless
+// of whatever the previous leader did or didn't write.
+func (h *Handler) reconcileAll() {
+	if h.statusUpdater == nil {
+		return
+	}
+	snaps := h.idx.AllSnapshots()
+	for _, s := range snaps {
+		h.statusUpdater.Enqueue(s.Namespace, s.Name, s.Generation, s.Result)
+	}
+	log.Infof("reconcileAll: enqueued %d slices", len(snaps))
+}
+
 func (h *Handler) ServeDNS(ctx context.Context, w dns.ResponseWriter, r *dns.Msg) (int, error) {
 	state := request.Request{W: w, Req: r}
 	qname := state.QName()

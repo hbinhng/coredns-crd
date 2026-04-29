@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -324,6 +325,87 @@ func TestServeDNS_QueryNameLowercasing(t *testing.T) {
 	rcode, _ := h.ServeDNS(context.Background(), w, query("FOO.EXAMPLE.COM.", dns.TypeA))
 	if rcode != dns.RcodeSuccess || len(w.msg.Answer) != 1 {
 		t.Errorf("uppercase query should resolve, got rcode=%d msg=%+v", rcode, w.msg)
+	}
+}
+
+func TestReconcileAll_EnqueuesEverySlice(t *testing.T) {
+	h, su := newHandler(t)
+	h.applySlice(mkSlice("ns", "a", "u1", time.Unix(0, 0), 1, aRecord("a.example.com.", "1.1.1.1")))
+	h.applySlice(mkSlice("ns", "b", "u2", time.Unix(3600, 0), 2, aRecord("b.example.com.", "2.2.2.2")))
+	before := len(su.Calls())
+
+	h.reconcileAll()
+
+	calls := su.Calls()[before:]
+	if len(calls) != 2 {
+		t.Fatalf("expected 2 enqueues from reconcileAll, got %d", len(calls))
+	}
+	gen := map[string]int64{}
+	for _, c := range calls {
+		gen[c.Name] = c.Generation
+	}
+	if gen["a"] != 1 || gen["b"] != 2 {
+		t.Errorf("reconcileAll generations wrong: %v", gen)
+	}
+}
+
+func TestReconcileAll_EmptyIndex_NoEnqueues(t *testing.T) {
+	h, su := newHandler(t)
+	h.reconcileAll()
+	if got := len(su.Calls()); got != 0 {
+		t.Errorf("empty index reconcile should enqueue 0, got %d", got)
+	}
+}
+
+func TestReconcileAll_NilStatusUpdater_NoOp(t *testing.T) {
+	cfg := &config{}
+	h := New(cfg)
+	h.applySlice(mkSlice("ns", "n", "u1", time.Unix(0, 0), 1, aRecord("foo.example.com.", "1.2.3.4")))
+	// Sanity: the index actually has the slice — otherwise the no-panic
+	// assertion below is vacuous.
+	if got := h.idx.AllSnapshots(); len(got) != 1 {
+		t.Fatalf("setup: expected index to have 1 slice, got %d", len(got))
+	}
+	h.reconcileAll() // must not panic
+}
+
+func TestReconcileAll_ConcurrentWithApplySlice(t *testing.T) {
+	// Locks contract: AllSnapshots reads with RLock; applySlice writes with
+	// Lock. Iterating reconcileAll concurrently with apply-storms must be
+	// race-free. -race amplifies the assertion; the value asserts no panic
+	// + a non-empty index at the end.
+	h, _ := newHandler(t)
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; ; i++ {
+			select {
+			case <-stop:
+				return
+			default:
+				h.applySlice(mkSlice("ns", "n"+string(rune('a'+i%4)), "u",
+					time.Unix(int64(i), 0), int64(i), aRecord("foo.example.com.", "1.2.3.4")))
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				h.reconcileAll()
+			}
+		}
+	}()
+	time.Sleep(50 * time.Millisecond)
+	close(stop)
+	wg.Wait()
+	if len(h.idx.AllSnapshots()) == 0 {
+		t.Errorf("expected non-empty index after concurrent apply storm")
 	}
 }
 
