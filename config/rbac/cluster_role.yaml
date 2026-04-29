@@ -1,0 +1,19 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: coredns-crd
+rules:
+  # crd plugin
+  - apiGroups: ["dns.coredns-crd.io"]
+    resources: ["dnsslices"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["dns.coredns-crd.io"]
+    resources: ["dnsslices/status"]
+    verbs: ["get", "patch", "update"]
+  # kubernetes plugin (for cluster.local resolution alongside crd)
+  - apiGroups: [""]
+    resources: ["endpoints", "services", "pods", "namespaces"]
+    verbs: ["list", "watch"]
+  - apiGroups: ["discovery.k8s.io"]
+    resources: ["endpointslices"]
+    verbs: ["list", "watch"]

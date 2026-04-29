@@ -1,0 +1,37 @@
+apiVersion: dns.coredns-crd.io/v1alpha1
+kind: DNSSlice
+metadata:
+  name: web
+  namespace: default
+spec:
+  defaultTTL: 300
+  entries:
+    - name: web.example.com.
+      type: A
+      a:
+        address: 10.0.0.1
+    - name: web.example.com.
+      type: A
+      a:
+        address: 10.0.0.2
+    - name: web6.example.com.
+      type: AAAA
+      aaaa:
+        address: 2001:db8::1
+    - name: alias.example.com.
+      type: CNAME
+      cname:
+        target: web.example.com.
+    - name: example.com.
+      type: TXT
+      ttl: 60
+      txt:
+        values:
+          - "v=spf1 -all"
+    - name: _http._tcp.example.com.
+      type: SRV
+      srv:
+        priority: 10
+        weight: 100
+        port: 80
+        target: web.example.com.
