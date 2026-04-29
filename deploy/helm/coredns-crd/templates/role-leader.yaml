@@ -2,7 +2,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: {{ include "coredns-crd.fullname" . }}-leader
+  name: {{ printf "%s-leader" (include "coredns-crd.fullname" .) | trunc 63 | trimSuffix "-" }}
   namespace: {{ include "coredns-crd.leaseNamespace" . }}
   labels: {{- include "coredns-crd.labels" . | nindent 4 }}
 rules:

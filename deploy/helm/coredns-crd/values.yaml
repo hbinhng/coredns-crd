@@ -13,6 +13,14 @@ image:
 
 imagePullSecrets: []
 
+# Annotations applied to pod template (e.g., for Linkerd/Istio injection
+# control or scrape configuration).
+podAnnotations: {}
+
+# Annotations applied to the ServiceAccount (e.g., for IAM Roles for Service
+# Accounts on EKS or Workload Identity on GKE).
+serviceAccountAnnotations: {}
+
 resources:
   requests:
     cpu: 100m

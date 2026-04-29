@@ -1,0 +1,21 @@
+coredns-crd installed.
+
+Service: {{ include "coredns-crd.fullname" . }} (namespace {{ .Release.Namespace }})
+{{- with .Values.service.clusterIP }}
+ClusterIP: {{ . }}
+{{- end }}
+
+Verify resolution from a debug pod:
+
+  kubectl run --rm -it dnstest --image=alpine:3.20 --restart=Never -- \
+    sh -c "apk add --no-cache bind-tools && dig +short @{{ default "<service-cluster-ip>" .Values.service.clusterIP }} <name> <type>"
+
+Apply an example DNSSlice:
+
+  kubectl apply -f https://raw.githubusercontent.com/hbinhng/coredns-crd/main/config/example/dnsslice.yaml
+
+Verify image signature:
+
+  cosign verify {{ include "coredns-crd.image" . }} \
+    --certificate-identity-regexp 'https://github.com/hbinhng/coredns-crd/.*' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com

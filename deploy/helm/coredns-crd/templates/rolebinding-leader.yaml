@@ -1,14 +1,15 @@
 {{- if .Values.leaderElection.enabled }}
+{{- $leaderName := printf "%s-leader" (include "coredns-crd.fullname" .) | trunc 63 | trimSuffix "-" -}}
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: {{ include "coredns-crd.fullname" . }}-leader
+  name: {{ $leaderName }}
   namespace: {{ include "coredns-crd.leaseNamespace" . }}
   labels: {{- include "coredns-crd.labels" . | nindent 4 }}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role
-  name: {{ include "coredns-crd.fullname" . }}-leader
+  name: {{ $leaderName }}
 subjects:
   - kind: ServiceAccount
     name: {{ include "coredns-crd.serviceAccountName" . }}
