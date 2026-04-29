@@ -54,3 +54,34 @@ See `values.yaml` for the full set. Common knobs:
 | `leaderElection.enabled` | `true` | Set false only for `replicaCount: 1` dev. |
 | `corefile.kubernetes.enabled` | `true` | Set false to skip cluster.local resolution. |
 | `podDisruptionBudget.minAvailable` | 1 | DNS uptime guarantee during drains. |
+
+## Hardening
+
+### NetworkPolicy
+
+`networkPolicy.enabled: true` adds a `NetworkPolicy` that allows ingress
+to port 53 from any pod and to port 9153 from a configurable selector
+(default: `app.kubernetes.io/name: prometheus` in the `monitoring`
+namespace). Egress is unrestricted by design — kube-apiserver and DNS
+upstream IPs vary per cluster.
+
+NetworkPolicy is enforced only by CNIs that implement it: Calico,
+Cilium, k3s's flannel-with-network-policy controller, and others.
+**Vanilla flannel does not enforce.** Verify your CNI before relying on
+this.
+
+Probe traffic (kubelet → ports 8080/8181) is allowed implicitly via
+host-network bypass on most CNIs. If your CNI blocks it, add an
+explicit ingress rule for your node CIDR.
+
+### RBAC
+
+The chart grants only the permissions the configured Corefile actually
+needs:
+
+- `corefile.kubernetes.enabled: false` removes services, namespaces,
+  endpointslices and pods entirely.
+- `corefile.kubernetes.pods: disabled` removes the pods rule even when
+  the kubernetes plugin is enabled (no pod IP reverse resolution).
+- `endpoints` is never granted — the chart requires k8s 1.28+ where
+  EndpointSlice is the only consumer for the kubernetes plugin.
