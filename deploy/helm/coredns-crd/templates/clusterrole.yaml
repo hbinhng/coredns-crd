@@ -12,10 +12,16 @@ rules:
     resources: ["dnsslices/status"]
     verbs: ["get", "patch", "update"]
   {{- if .Values.corefile.kubernetes.enabled }}
-  # kubernetes plugin
+  # kubernetes plugin: services + namespaces always; pods only when not "disabled".
+  # Endpoints intentionally omitted — chart requires k8s 1.28+ (EndpointSlice GA since 1.21).
   - apiGroups: [""]
-    resources: ["endpoints", "services", "pods", "namespaces"]
+    resources: ["services", "namespaces"]
     verbs: ["list", "watch"]
+  {{- if ne .Values.corefile.kubernetes.pods "disabled" }}
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["list", "watch"]
+  {{- end }}
   - apiGroups: ["discovery.k8s.io"]
     resources: ["endpointslices"]
     verbs: ["list", "watch"]
