@@ -34,10 +34,11 @@ type sliceCandidates struct {
 // Index is a thread-safe FQDN→RR index with last-write-wins arbitration.
 // Winner = slice with oldest creationTimestamp; UID breaks ties for determinism.
 type Index struct {
-	mu      sync.RWMutex
-	slices  map[sliceKey]sliceCandidates
-	lookup  map[recordKey][]dns.RR
-	winners map[recordKey]sliceKey
+	mu       sync.RWMutex
+	slices   map[sliceKey]sliceCandidates
+	lookup   map[recordKey][]dns.RR
+	winners  map[recordKey]sliceKey
+	observer func(slices, records, conflicts int)
 }
 
 func New() *Index {
@@ -46,6 +47,43 @@ func New() *Index {
 		lookup:  map[recordKey][]dns.RR{},
 		winners: map[recordKey]sliceKey{},
 	}
+}
+
+// SetSizeObserver installs a callback fired after every Index mutation with
+// (slices, records, conflicts). `conflicts` is the number of slices with at
+// least one Lost record key, not the total number of contested keys.
+//
+// The callback runs synchronously under the Index write lock — it must be
+// cheap and non-reentrant (calling back into Index would deadlock).
+//
+// Pass nil to clear. Single observer per Index.
+func (i *Index) SetSizeObserver(fn func(slices, records, conflicts int)) {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	i.observer = fn
+}
+
+// fireObserver computes current sizes under the held write lock and invokes
+// the observer. Caller must hold i.mu (write lock). O(slices * keys-per-slice);
+// trivial at current scale (50 keys/slice cap, sub-ms for thousands of slices).
+func (i *Index) fireObserver() {
+	if i.observer == nil {
+		return
+	}
+	records := 0
+	for _, rrs := range i.lookup {
+		records += len(rrs)
+	}
+	conflicts := 0
+	for sk, sc := range i.slices {
+		for k := range sc.rrs {
+			if i.winners[k] != sk {
+				conflicts++
+				break
+			}
+		}
+	}
+	i.observer(len(i.slices), records, conflicts)
 }
 
 // UpsertResult is the per-slice arbitration outcome, suitable for status emission.
@@ -86,6 +124,7 @@ func (i *Index) Upsert(slice *apiv1.DNSSlice) (UpsertResult, []SliceStatus) {
 	for k := range affected {
 		i.recompute(k)
 	}
+	i.fireObserver()
 
 	primary, _ := i.snapshot(key)
 	siblings := i.diffSiblings(pre)
@@ -107,6 +146,7 @@ func (i *Index) Delete(namespace, name string) []SliceStatus {
 	for k := range affected {
 		i.recompute(k)
 	}
+	i.fireObserver()
 	return i.diffSiblings(pre)
 }
 

@@ -746,6 +746,93 @@ func TestAllSnapshots_PropagatesParseErrors(t *testing.T) {
 	}
 }
 
+// ---------- SetSizeObserver ----------
+
+func TestSetSizeObserver_FiresAfterUpsert(t *testing.T) {
+	idx := New()
+	type call struct{ slices, records, conflicts int }
+	var calls []call
+	idx.SetSizeObserver(func(s, r, c int) {
+		calls = append(calls, call{s, r, c})
+	})
+	idx.Upsert(mkSlice("ns", "a", "u1", t0(), 1, nil,
+		a("foo.example.com.", "1.1.1.1", nil),
+		a("foo.example.com.", "1.1.1.2", nil),
+	))
+	if len(calls) == 0 {
+		t.Fatal("observer never fired")
+	}
+	last := calls[len(calls)-1]
+	if last.slices != 1 {
+		t.Errorf("slices=%d, want 1", last.slices)
+	}
+	if last.records != 2 {
+		t.Errorf("records=%d, want 2", last.records)
+	}
+	if last.conflicts != 0 {
+		t.Errorf("conflicts=%d, want 0", last.conflicts)
+	}
+}
+
+func TestSetSizeObserver_CountsActiveConflicts(t *testing.T) {
+	idx := New()
+	var conflicts int
+	idx.SetSizeObserver(func(_, _, c int) { conflicts = c })
+	idx.Upsert(mkSlice("ns", "older", "u1", t0(), 1, nil, a("foo.example.com.", "1.1.1.1", nil)))
+	idx.Upsert(mkSlice("ns", "newer", "u2", t0().Add(time.Hour), 1, nil, a("foo.example.com.", "2.2.2.2", nil)))
+	if conflicts != 1 {
+		t.Errorf("conflicts=%d, want 1 (newer is loser)", conflicts)
+	}
+}
+
+func TestSetSizeObserver_FiresAfterDelete(t *testing.T) {
+	idx := New()
+	idx.Upsert(mkSlice("ns", "a", "u1", t0(), 1, nil, a("foo.example.com.", "1.1.1.1", nil)))
+	var lastSlices int
+	idx.SetSizeObserver(func(s, _, _ int) { lastSlices = s })
+	idx.Delete("ns", "a")
+	if lastSlices != 0 {
+		t.Errorf("after delete: slices=%d, want 0", lastSlices)
+	}
+}
+
+func TestSetSizeObserver_ConflictsCountsSlicesNotKeys(t *testing.T) {
+	// Pin the metric semantics: one slice losing two distinct keys still
+	// counts as a single conflicting slice.
+	idx := New()
+	idx.Upsert(mkSlice("ns", "older", "u1", t0(), 1, nil,
+		a("foo.example.com.", "1.1.1.1", nil),
+		a("bar.example.com.", "2.2.2.2", nil),
+	))
+	var conflicts int
+	idx.SetSizeObserver(func(_, _, c int) { conflicts = c })
+	idx.Upsert(mkSlice("ns", "newer", "u2", t0().Add(time.Hour), 1, nil,
+		a("foo.example.com.", "9.9.9.9", nil),
+		a("bar.example.com.", "8.8.8.8", nil),
+	))
+	if conflicts != 1 {
+		t.Errorf("conflicts=%d, want 1 (single slice losing two keys)", conflicts)
+	}
+}
+
+func TestSetSizeObserver_DoesNotFireOnUnknownDelete(t *testing.T) {
+	idx := New()
+	fired := 0
+	idx.SetSizeObserver(func(_, _, _ int) { fired++ })
+	idx.Delete("ns", "ghost") // no-op
+	if fired != 0 {
+		t.Errorf("observer fired %d times on unknown delete, want 0", fired)
+	}
+}
+
+func TestSetSizeObserver_NilObserver_NoOp(t *testing.T) {
+	idx := New()
+	idx.SetSizeObserver(nil)
+	idx.Upsert(mkSlice("ns", "a", "u1", t0(), 1, nil, a("foo.example.com.", "1.1.1.1", nil)))
+	idx.Delete("ns", "a")
+	// Must not panic.
+}
+
 func TestUpsert_SiblingsSortedByNamespaceThenName(t *testing.T) {
 	idx := New()
 	// Three slices in three namespaces all losing to one new oldest entry.
