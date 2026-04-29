@@ -1,0 +1,11 @@
+apiVersion: dns.coredns-crd.io/v1alpha1
+kind: DNSSlice
+metadata:
+  name: e2e-loser
+  namespace: default
+spec:
+  entries:
+    - name: web.example.com.
+      type: A
+      a:
+        address: 9.9.9.9
