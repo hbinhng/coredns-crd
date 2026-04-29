@@ -1,0 +1,259 @@
+package crd
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/coredns/caddy"
+)
+
+// ---------- parseConfig ----------
+
+func parseConfigFromInput(t *testing.T, input string) (*config, error) {
+	t.Helper()
+	c := caddy.NewTestController("dns", input)
+	return parseConfig(c)
+}
+
+func TestParseConfig_Defaults(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ResyncPeriod != 30*time.Minute {
+		t.Errorf("default ResyncPeriod=%v, want 30m", cfg.ResyncPeriod)
+	}
+	if cfg.Kubeconfig != "" {
+		t.Errorf("default Kubeconfig=%q, want empty", cfg.Kubeconfig)
+	}
+	if len(cfg.Fall.Zones) != 0 {
+		t.Errorf("default Fall.Zones=%v, want empty", cfg.Fall.Zones)
+	}
+}
+
+func TestParseConfig_AllProperties(t *testing.T) {
+	input := `crd {
+		kubeconfig /tmp/kubeconfig
+		resync 5m
+		fallthrough .
+	}`
+	cfg, err := parseConfigFromInput(t, input)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Kubeconfig != "/tmp/kubeconfig" {
+		t.Errorf("Kubeconfig=%q", cfg.Kubeconfig)
+	}
+	if cfg.ResyncPeriod != 5*time.Minute {
+		t.Errorf("ResyncPeriod=%v", cfg.ResyncPeriod)
+	}
+	if len(cfg.Fall.Zones) != 1 || cfg.Fall.Zones[0] != "." {
+		t.Errorf("Fall.Zones=%v, want [.]", cfg.Fall.Zones)
+	}
+}
+
+func TestParseConfig_FallthroughWithSpecificZone(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+		fallthrough example.com.
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Fall.Zones) != 1 || cfg.Fall.Zones[0] != "example.com." {
+		t.Errorf("Fall.Zones=%v", cfg.Fall.Zones)
+	}
+}
+
+func TestParseConfig_FallthroughMultipleZones(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+		fallthrough a.example. b.example.
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.Fall.Zones) != 2 {
+		t.Fatalf("Fall.Zones=%v, want 2 entries", cfg.Fall.Zones)
+	}
+	if cfg.Fall.Zones[0] != "a.example." || cfg.Fall.Zones[1] != "b.example." {
+		t.Errorf("Fall.Zones order: got %v", cfg.Fall.Zones)
+	}
+}
+
+func TestParseConfig_EmptyBlock(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+}`)
+	if err != nil {
+		t.Fatalf("empty block should parse as defaults: %v", err)
+	}
+	if cfg.ResyncPeriod != 30*time.Minute {
+		t.Errorf("ResyncPeriod=%v", cfg.ResyncPeriod)
+	}
+}
+
+func TestParseConfig_PropertyOrderIndependent(t *testing.T) {
+	a, err := parseConfigFromInput(t, `crd {
+		resync 1m
+		kubeconfig /tmp/x
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := parseConfigFromInput(t, `crd {
+		kubeconfig /tmp/x
+		resync 1m
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Kubeconfig != b.Kubeconfig || a.ResyncPeriod != b.ResyncPeriod {
+		t.Errorf("property order changed parse: a=%+v b=%+v", a, b)
+	}
+}
+
+func TestParseConfig_CaseSensitivePropertyNames(t *testing.T) {
+	if _, err := parseConfigFromInput(t, `crd {
+		Kubeconfig /tmp/x
+	}`); err == nil {
+		t.Errorf("expected unknown property for capitalized 'Kubeconfig'")
+	}
+}
+
+func TestParseConfig_MultipleBlocks_LastWinsScalars(t *testing.T) {
+	// Pins current behavior: when multiple `crd { ... }` blocks appear in the
+	// same server, scalars (kubeconfig, resync) are last-wins; fallthrough
+	// zones are overwritten on each occurrence.
+	cfg, err := parseConfigFromInput(t, `crd {
+		resync 1m
+		kubeconfig /tmp/a
+	}
+	crd {
+		resync 2m
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.ResyncPeriod != 2*time.Minute {
+		t.Errorf("expected last block's resync (2m), got %v", cfg.ResyncPeriod)
+	}
+	if cfg.Kubeconfig != "/tmp/a" {
+		t.Errorf("expected kubeconfig from first block to persist, got %q", cfg.Kubeconfig)
+	}
+}
+
+func TestParseConfig_Errors(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantSub string
+	}{
+		{
+			"unexpected args on plugin line",
+			`crd extra-arg`,
+			"unexpected args",
+		},
+		{
+			"unknown property",
+			`crd {
+				bogus value
+			}`,
+			"unknown property",
+		},
+		{
+			"invalid resync duration",
+			`crd {
+				resync not-a-duration
+			}`,
+			"invalid resync duration",
+		},
+		{
+			"missing kubeconfig argument",
+			`crd {
+				kubeconfig
+			}`,
+			"Wrong argument count",
+		},
+		{
+			"missing resync argument",
+			`crd {
+				resync
+			}`,
+			"Wrong argument count",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfigFromInput(t, tc.input)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
+}
+
+// ---------- loadRESTConfig ----------
+
+func TestLoadRESTConfig_FromKubeconfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kubeconfig")
+	content := `apiVersion: v1
+kind: Config
+clusters:
+- name: test
+  cluster:
+    server: https://127.0.0.1:6443
+contexts:
+- name: test
+  context:
+    cluster: test
+    user: test
+users:
+- name: test
+  user:
+    token: dummy-token
+current-context: test
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write kubeconfig: %v", err)
+	}
+
+	rc, err := loadRESTConfig(path)
+	if err != nil {
+		t.Fatalf("loadRESTConfig: %v", err)
+	}
+	if rc.Host != "https://127.0.0.1:6443" {
+		t.Errorf("Host=%q", rc.Host)
+	}
+	if rc.BearerToken != "dummy-token" {
+		t.Errorf("BearerToken not propagated: %+v", rc)
+	}
+}
+
+func TestLoadRESTConfig_BadKubeconfigFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "kubeconfig")
+	if err := os.WriteFile(path, []byte("not yaml at all: ::"), 0o600); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+	if _, err := loadRESTConfig(path); err == nil {
+		t.Fatalf("expected error parsing bad kubeconfig")
+	}
+}
+
+func TestLoadRESTConfig_InClusterFallback(t *testing.T) {
+	// With kubeconfig=="" and not running inside a pod, InClusterConfig
+	// returns ErrNotInCluster — exercises the second branch.
+	t.Setenv("KUBERNETES_SERVICE_HOST", "")
+	t.Setenv("KUBERNETES_SERVICE_PORT", "")
+	os.Unsetenv("KUBERNETES_SERVICE_HOST")
+	os.Unsetenv("KUBERNETES_SERVICE_PORT")
+
+	if _, err := loadRESTConfig(""); err == nil {
+		t.Errorf("expected ErrNotInCluster outside a pod")
+	}
+}
