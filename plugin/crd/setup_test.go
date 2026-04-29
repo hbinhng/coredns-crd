@@ -257,3 +257,143 @@ func TestLoadRESTConfig_InClusterFallback(t *testing.T) {
 		t.Errorf("expected ErrNotInCluster outside a pod")
 	}
 }
+
+// ---------- leader_election parsing ----------
+
+func TestParseConfig_LeaderElection_Defaults(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LeaderElection.Disabled {
+		t.Errorf("leader election should be enabled by default")
+	}
+	if cfg.LeaderElection.Namespace != "" {
+		t.Errorf("Namespace default should be empty (resolved at runtime), got %q", cfg.LeaderElection.Namespace)
+	}
+	if cfg.LeaderElection.LeaseName != "" {
+		t.Errorf("LeaseName default should be empty (resolved at runtime), got %q", cfg.LeaderElection.LeaseName)
+	}
+}
+
+func TestParseConfig_LeaderElection_AllProperties(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+		leader_election {
+			namespace foo
+			lease_name bar
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.LeaderElection.Namespace != "foo" || cfg.LeaderElection.LeaseName != "bar" {
+		t.Errorf("got %+v", cfg.LeaderElection)
+	}
+	if cfg.LeaderElection.Disabled {
+		t.Errorf("Disabled should be false")
+	}
+}
+
+func TestParseConfig_LeaderElection_EmptyBlock(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+		leader_election {
+		}
+	}`)
+	if err != nil {
+		t.Fatalf("empty leader_election block should parse cleanly: %v", err)
+	}
+	if cfg.LeaderElection.Disabled {
+		t.Errorf("Disabled should be false on empty block")
+	}
+}
+
+func TestParseConfig_LeaderElection_Disable(t *testing.T) {
+	cfg, err := parseConfigFromInput(t, `crd {
+		leader_election {
+			disable
+		}
+	}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.LeaderElection.Disabled {
+		t.Errorf("expected Disabled=true")
+	}
+}
+
+func TestParseConfig_LeaderElection_Errors(t *testing.T) {
+	cases := []struct {
+		name    string
+		input   string
+		wantSub string
+	}{
+		{
+			"unknown property",
+			`crd { leader_election { bogus value } }`,
+			"unknown leader_election property",
+		},
+		{
+			"missing opening brace",
+			`crd {
+				leader_election
+			}`,
+			`expected "{" after leader_election`,
+		},
+		{
+			"truncated block (no closing brace)",
+			`crd {
+				leader_election {
+					disable`,
+			"Unexpected EOF",
+		},
+		{
+			"disable conflicts with namespace",
+			`crd {
+				leader_election {
+					disable
+					namespace foo
+				}
+			}`,
+			"disable cannot coexist",
+		},
+		{
+			"disable conflicts with lease_name",
+			`crd {
+				leader_election {
+					lease_name foo
+					disable
+				}
+			}`,
+			"disable cannot coexist",
+		},
+		{
+			"namespace missing arg",
+			`crd {
+				leader_election {
+					namespace
+				}
+			}`,
+			"Wrong argument count",
+		},
+		{
+			"lease_name missing arg",
+			`crd {
+				leader_election {
+					lease_name
+				}
+			}`,
+			"Wrong argument count",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := parseConfigFromInput(t, tc.input)
+			if err == nil {
+				t.Fatalf("expected error containing %q", tc.wantSub)
+			}
+			if !strings.Contains(err.Error(), tc.wantSub) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantSub)
+			}
+		})
+	}
+}

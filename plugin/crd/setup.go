@@ -34,9 +34,20 @@ func init() {
 }
 
 type config struct {
-	Kubeconfig   string
-	ResyncPeriod time.Duration
-	Fall         fall.F
+	Kubeconfig     string
+	ResyncPeriod   time.Duration
+	Fall           fall.F
+	LeaderElection LeaderElectionConfig
+}
+
+// LeaderElectionConfig controls the optional client-go leader election. When
+// Disabled is true the plugin behaves as if every replica is leader (existing
+// single-replica semantics). Empty Namespace/LeaseName fall back at runtime
+// to POD_NAMESPACE or "kube-system" and "coredns-crd-leader" respectively.
+type LeaderElectionConfig struct {
+	Disabled  bool
+	Namespace string
+	LeaseName string
 }
 
 func setup(c *caddy.Controller) error {
@@ -114,12 +125,51 @@ func parseConfig(c *caddy.Controller) (*config, error) {
 				cfg.ResyncPeriod = d
 			case "fallthrough":
 				cfg.Fall.SetZonesFromArgs(c.RemainingArgs())
+			case "leader_election":
+				if err := parseLeaderElection(c, &cfg.LeaderElection); err != nil {
+					return nil, err
+				}
 			default:
 				return nil, c.Errf("unknown property %q", c.Val())
 			}
 		}
 	}
 	return cfg, nil
+}
+
+// parseLeaderElection consumes a `leader_election { ... }` sub-block.
+// caddy's Dispenser only tracks one level of NextBlock nesting, so we
+// step the cursor manually across the inner braces.
+func parseLeaderElection(c *caddy.Controller, le *LeaderElectionConfig) error {
+	if !c.NextArg() || c.Val() != "{" {
+		return c.Errf("expected %q after leader_election", "{")
+	}
+	for c.Next() {
+		v := c.Val()
+		if v == "}" {
+			if le.Disabled && (le.Namespace != "" || le.LeaseName != "") {
+				return c.Errf("leader_election disable cannot coexist with namespace or lease_name")
+			}
+			return nil
+		}
+		switch v {
+		case "disable":
+			le.Disabled = true
+		case "namespace":
+			if !c.NextArg() {
+				return c.ArgErr()
+			}
+			le.Namespace = c.Val()
+		case "lease_name":
+			if !c.NextArg() {
+				return c.ArgErr()
+			}
+			le.LeaseName = c.Val()
+		default:
+			return c.Errf("unknown leader_election property %q", v)
+		}
+	}
+	return c.EOFErr()
 }
 
 func loadRESTConfig(kubeconfig string) (*rest.Config, error) {
