@@ -14,6 +14,13 @@ Apply an example DNSSlice:
 
   kubectl apply -f https://raw.githubusercontent.com/hbinhng/coredns-crd/main/config/example/dnsslice.yaml
 
+{{- if .Values.networkPolicy.enabled }}
+
+NetworkPolicy is enabled. Confirm your CNI enforces NetworkPolicy and
+that networkPolicy.metricsAllowedFrom matches your Prometheus install
+(default: app.kubernetes.io/name=prometheus in the monitoring namespace).
+{{- end }}
+
 Verify image signature:
 
   cosign verify {{ include "coredns-crd.image" . }} \

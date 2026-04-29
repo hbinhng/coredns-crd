@@ -12,6 +12,10 @@ rules:
     resources: ["dnsslices/status"]
     verbs: ["get", "patch", "update"]
   {{- if .Values.corefile.kubernetes.enabled }}
+  {{- $validPods := list "disabled" "insecure" "verified" }}
+  {{- if not (has .Values.corefile.kubernetes.pods $validPods) }}
+  {{- fail (printf "corefile.kubernetes.pods must be one of %v, got %q" $validPods .Values.corefile.kubernetes.pods) }}
+  {{- end }}
   # kubernetes plugin: services + namespaces always; pods only when not "disabled".
   # Endpoints intentionally omitted — chart requires k8s 1.28+ (EndpointSlice GA since 1.21).
   - apiGroups: [""]
