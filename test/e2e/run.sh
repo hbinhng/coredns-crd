@@ -129,3 +129,46 @@ grep -q ConflictDetected <<<"$EVENTS" || {
   exit 1
 }
 echo "ConflictDetected Event observed"
+
+phase "Scenario 5: Failover"
+LEADER_BEFORE=$(kubectl -n kube-system get lease coredns-crd-leader \
+  -o jsonpath='{.spec.holderIdentity}')
+echo "killing leader $LEADER_BEFORE"
+kubectl -n kube-system delete pod "$LEADER_BEFORE" \
+  --grace-period=0 --force >/dev/null 2>&1 || true
+
+# A surviving pod must claim the lease within 30s.
+NEW=""
+for i in $(seq 1 30); do
+  NEW=$(kubectl -n kube-system get lease coredns-crd-leader \
+    -o jsonpath='{.spec.holderIdentity}' 2>/dev/null || true)
+  [[ -n "$NEW" && "$NEW" != "$LEADER_BEFORE" ]] && break
+  sleep 1
+done
+if [[ "$NEW" == "$LEADER_BEFORE" || -z "$NEW" ]]; then
+  echo "lease never failed over (held by '$LEADER_BEFORE' -> '$NEW')"
+  exit 1
+fi
+echo "lease failed over: $LEADER_BEFORE -> $NEW"
+
+# DNS still resolves.
+kubectl run dig2 --image=alpine:3.20 --restart=Never \
+  --overrides='{"spec":{"dnsPolicy":"Default"}}' \
+  --command -- sh -ec "
+  apk add --no-cache bind-tools
+  dig +short @$DNS_IP web.example.com A
+"
+for i in $(seq 1 30); do
+  PHASE=$(kubectl get pod dig2 -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
+  sleep 1
+done
+DIG2_OUT=$(kubectl logs dig2 2>/dev/null)
+kubectl delete pod dig2 --wait=false 2>/dev/null || true
+grep -q '10.0.0.' <<<"$DIG2_OUT" || {
+  echo "DNS broken after failover; got: $DIG2_OUT"
+  exit 1
+}
+echo "DNS still resolving after failover"
+
+phase "ALL SCENARIOS PASSED"
