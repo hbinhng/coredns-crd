@@ -7,7 +7,7 @@ ARG COREDNS_VERSION=v1.12.0
 
 FROM golang:${GO_VERSION}-alpine AS builder
 ARG COREDNS_VERSION
-RUN apk add --no-cache git make bash
+RUN apk add --no-cache git make bash libcap-utils
 
 WORKDIR /src/plugin
 COPY . .
@@ -28,6 +28,14 @@ RUN go mod edit -replace=github.com/hbinhng/coredns-crd=/src/plugin
 RUN go generate
 RUN go mod tidy
 RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -ldflags "-s -w" -o /out/coredns
+
+# Allow binding to privileged DNS port 53 when running as non-root.
+# K8s grants NET_BIND_SERVICE in the bounding set, but on most container
+# runtimes that capability is not in the ambient set, so a non-root exec
+# loses it. File capabilities make the cap permitted+effective at exec
+# regardless of ambient/inheritable state. BuildKit preserves xattrs
+# across COPY into the final image.
+RUN setcap cap_net_bind_service=+ep /out/coredns
 
 FROM gcr.io/distroless/static:nonroot
 COPY --from=builder /out/coredns /coredns
