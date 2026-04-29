@@ -16,6 +16,8 @@ Run the same scenarios CI runs, against any current-context cluster.
 
 ## Run
 
+Run from the repo root (the script paths are repo-relative):
+
     bash test/e2e/run.sh
 
 The script tears down its own helper pods on EXIT (trap). The chart

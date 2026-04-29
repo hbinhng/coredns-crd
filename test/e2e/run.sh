@@ -6,11 +6,13 @@ set -euo pipefail
 phase() { printf '\n\033[1;36m=== %s ===\033[0m\n' "$1"; }
 
 # Strict cleanup on exit (success or failure) so a re-run starts clean.
+# Pre-cleanup at start in case a previous SIGKILL'd run left residue.
 cleanup() {
-  kubectl delete pod dig dig2 metrics --wait=false --ignore-not-found 2>/dev/null || true
-  kubectl delete dnsslice e2e-loser --wait=false --ignore-not-found 2>/dev/null || true
+  kubectl delete pod dig dig2 metrics --wait=true --timeout=15s --ignore-not-found 2>/dev/null || true
+  kubectl delete dnsslice e2e-loser --wait=true --timeout=15s --ignore-not-found 2>/dev/null || true
 }
 trap cleanup EXIT
+cleanup
 
 phase "Scenario 1: Install"
 helm install coredns-crd deploy/helm/coredns-crd \
@@ -42,6 +44,7 @@ kubectl apply -f config/example/dnsslice.yaml
 kubectl wait --for=condition=Ready dnsslice/web --timeout=30s
 
 DNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
+[[ -n "$DNS_IP" ]] || { echo "kube-dns Service has no ClusterIP"; exit 1; }
 echo "DNS Service IP: $DNS_IP"
 
 # dnsPolicy: Default uses the node's resolver for apk; dig commands target
@@ -56,11 +59,13 @@ kubectl run dig --image=alpine:3.20 --restart=Never \
   echo == TXT ==    ; dig +short @$DNS_IP example.com TXT
   echo == SRV ==    ; dig +short @$DNS_IP _http._tcp.example.com SRV
 "
+PHASE=""
 for i in $(seq 1 30); do
   PHASE=$(kubectl get pod dig -o jsonpath='{.status.phase}' 2>/dev/null || true)
   [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
   sleep 1
 done
+[[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] || { echo "dig pod stuck in $PHASE"; exit 1; }
 DIG_OUT=$(kubectl logs dig 2>/dev/null)
 echo "$DIG_OUT"
 kubectl delete pod dig --wait=false 2>/dev/null || true
@@ -81,11 +86,13 @@ echo "scraping http://$LEADER_IP:9153/metrics"
 
 kubectl run metrics --image=curlimages/curl:8.10.1 --restart=Never \
   --command -- curl -s "http://$LEADER_IP:9153/metrics"
+PHASE=""
 for i in $(seq 1 30); do
   PHASE=$(kubectl get pod metrics -o jsonpath='{.status.phase}' 2>/dev/null || true)
   [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
   sleep 1
 done
+[[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] || { echo "metrics pod stuck in $PHASE"; exit 1; }
 METRICS_OUT=$(kubectl logs metrics 2>/dev/null)
 kubectl delete pod metrics --wait=false 2>/dev/null || true
 
@@ -151,18 +158,22 @@ if [[ "$NEW" == "$LEADER_BEFORE" || -z "$NEW" ]]; then
 fi
 echo "lease failed over: $LEADER_BEFORE -> $NEW"
 
-# DNS still resolves.
+# DNS still resolves. Re-derive DNS_IP defensively.
+DNS_IP=$(kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}')
+[[ -n "$DNS_IP" ]] || { echo "kube-dns Service has no ClusterIP"; exit 1; }
 kubectl run dig2 --image=alpine:3.20 --restart=Never \
   --overrides='{"spec":{"dnsPolicy":"Default"}}' \
   --command -- sh -ec "
   apk add --no-cache bind-tools
   dig +short @$DNS_IP web.example.com A
 "
+PHASE=""
 for i in $(seq 1 30); do
   PHASE=$(kubectl get pod dig2 -o jsonpath='{.status.phase}' 2>/dev/null || true)
   [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
   sleep 1
 done
+[[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] || { echo "dig2 pod stuck in $PHASE"; exit 1; }
 DIG2_OUT=$(kubectl logs dig2 2>/dev/null)
 kubectl delete pod dig2 --wait=false 2>/dev/null || true
 grep -q '10.0.0.' <<<"$DIG2_OUT" || {
