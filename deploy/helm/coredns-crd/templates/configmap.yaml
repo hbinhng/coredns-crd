@@ -1,0 +1,63 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "coredns-crd.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels: {{- include "coredns-crd.labels" . | nindent 4 }}
+data:
+  Corefile: |
+    {{- range .Values.corefile.zones }}
+    {{ . }} {
+        {{- if $.Values.corefile.errors }}
+        errors
+        {{- end }}
+        {{- if $.Values.corefile.health.enabled }}
+        health {
+          lameduck {{ $.Values.corefile.health.lameduck }}
+        }
+        {{- end }}
+        {{- if $.Values.corefile.ready }}
+        ready
+        {{- end }}
+        crd {
+          {{- if $.Values.corefile.crd.fallthrough }}
+          fallthrough
+          {{- end }}
+          {{- if not $.Values.leaderElection.enabled }}
+          leader_election {
+            disable
+          }
+          {{- else if or $.Values.leaderElection.namespace (ne $.Values.leaderElection.leaseName "coredns-crd-leader") }}
+          leader_election {
+            {{- with $.Values.leaderElection.namespace }}
+            namespace {{ . }}
+            {{- end }}
+            {{- if ne $.Values.leaderElection.leaseName "coredns-crd-leader" }}
+            lease_name {{ $.Values.leaderElection.leaseName }}
+            {{- end }}
+          }
+          {{- end }}
+        }
+        {{- if $.Values.corefile.kubernetes.enabled }}
+        kubernetes {{ $.Values.corefile.kubernetes.cluster }} {{ join " " $.Values.corefile.kubernetes.fallthroughZones }} {
+          pods {{ $.Values.corefile.kubernetes.pods }}
+          fallthrough {{ join " " $.Values.corefile.kubernetes.fallthroughZones }}
+          ttl {{ $.Values.corefile.kubernetes.ttl }}
+        }
+        {{- end }}
+        prometheus {{ $.Values.corefile.prometheus.listen }}
+        forward . {{ $.Values.corefile.forward.upstream }} {
+          max_concurrent {{ $.Values.corefile.forward.maxConcurrent }}
+        }
+        cache {{ $.Values.corefile.cache.ttl }}
+        {{- if $.Values.corefile.loop }}
+        loop
+        {{- end }}
+        {{- if $.Values.corefile.reload }}
+        reload
+        {{- end }}
+        {{- if $.Values.corefile.loadbalance }}
+        loadbalance
+        {{- end }}
+    }
+    {{- end }}
