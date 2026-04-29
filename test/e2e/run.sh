@@ -14,13 +14,39 @@ cleanup() {
 trap cleanup EXIT
 cleanup
 
+phase "Pre-clean: remove prior chart install + stock CoreDNS"
+# Idempotency: uninstall any prior coredns-crd release before reinstalling.
+if helm status coredns-crd -n kube-system >/dev/null 2>&1; then
+  echo "uninstalling prior coredns-crd release"
+  helm uninstall coredns-crd -n kube-system --wait
+fi
+
+# Stock CoreDNS marker: a Deployment named `coredns` in kube-system.
+# Our chart's Deployment is named `kube-dns` (fullnameOverride), so it
+# never matches. Capture and preserve the existing kube-dns ClusterIP so
+# pods that already use ClusterFirst keep resolving after the swap.
+EXISTING_DNS_IP=""
+if kubectl -n kube-system get deployment coredns >/dev/null 2>&1; then
+  EXISTING_DNS_IP=$(kubectl -n kube-system get svc kube-dns \
+    -o jsonpath='{.spec.clusterIP}' 2>/dev/null || true)
+  echo "stock CoreDNS present; removing (preserving ClusterIP $EXISTING_DNS_IP)"
+  kubectl -n kube-system delete deployment coredns --wait=true --ignore-not-found
+  kubectl -n kube-system delete service kube-dns --wait=true --ignore-not-found
+  kubectl -n kube-system delete configmap coredns --wait=true --ignore-not-found
+else
+  echo "no stock CoreDNS Deployment; nothing to remove"
+fi
+
 phase "Scenario 1: Install"
-helm install coredns-crd deploy/helm/coredns-crd \
-  --namespace kube-system \
-  --set image.repository=coredns-crd \
-  --set image.tag=e2e \
-  --set image.pullPolicy=IfNotPresent \
+HELM_ARGS=(
+  --namespace kube-system
+  --set image.repository=coredns-crd
+  --set image.tag=e2e
+  --set image.pullPolicy=IfNotPresent
   --set fullnameOverride=kube-dns
+)
+[[ -n "$EXISTING_DNS_IP" ]] && HELM_ARGS+=(--set service.clusterIP="$EXISTING_DNS_IP")
+helm install coredns-crd deploy/helm/coredns-crd "${HELM_ARGS[@]}"
 
 kubectl -n kube-system rollout status deployment/kube-dns --timeout=120s
 
