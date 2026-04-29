@@ -1,0 +1,8 @@
+/bin/
+/dist/
+/coredns
+*.test
+*.out
+.idea/
+.vscode/
+.claude/
