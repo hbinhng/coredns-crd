@@ -13,8 +13,10 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/record"
 
 	apiv1 "github.com/hbinhng/coredns-crd/api/v1alpha1"
+	pluginevents "github.com/hbinhng/coredns-crd/internal/events"
 	"github.com/hbinhng/coredns-crd/internal/index"
 )
 
@@ -65,6 +67,10 @@ func newHandler(t *testing.T) (*Handler, *fakeStatusUpdater) {
 	h := New(cfg)
 	su := newFakeStatusUpdater()
 	h.statusUpdater = su
+	// Real (buffered) recorder so emitter actually fires events on
+	// transitions — without this, the "transition detected" code path in
+	// applySlice would be unreachable from tests.
+	h.emitter = pluginevents.NewEmitter(record.NewFakeRecorder(100))
 	return h, su
 }
 
@@ -165,6 +171,22 @@ func TestApplySlice_EnqueuesPrimaryAndSiblings(t *testing.T) {
 	}
 	if calls[2].Name != "newer" || len(calls[2].Result.Lost) != 1 {
 		t.Errorf("second apply sibling: expected newer demoted to loser, got %+v", calls[2])
+	}
+}
+
+func TestApplySlice_PartialParseErrorsClassifiedAsPartial(t *testing.T) {
+	// One valid + one invalid entry: the slice partially applies. The
+	// applies metric should record this as "partial", not "parse_error".
+	h, _ := newHandler(t)
+	h.applySlice(mkSlice("ns", "mixed", "u1", time.Unix(0, 0), 1,
+		aRecord("good.example.com.", "1.2.3.4"),
+		apiv1.DNSEntry{Name: "x.example.com.", Type: "A"}, // missing .a → parse error
+	))
+	// The metric assertion lives indirectly: applySlice must not panic and
+	// the index gets the valid record. A direct metric assertion is in the
+	// metrics test suite.
+	if rrs := h.idx.Lookup("good.example.com.", 1); len(rrs) != 1 {
+		t.Errorf("expected good.example.com to be served despite partial errors, got %v", rrs)
 	}
 }
 

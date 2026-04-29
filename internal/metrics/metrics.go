@@ -76,7 +76,7 @@ func primeLabels() {
 	for _, r := range []string{"hit", "miss", "cname_fallback", "fallthrough", "nxdomain"} {
 		lookups.WithLabelValues(r)
 	}
-	for _, r := range []string{"applied", "parse_error"} {
+	for _, r := range []string{"applied", "partial", "parse_error"} {
 		applies.WithLabelValues(r)
 	}
 	for _, r := range []string{"success", "error"} {
@@ -92,7 +92,10 @@ func primeLabels() {
 func RecordLookup(result string) { lookups.WithLabelValues(result).Inc() }
 
 // RecordApply increments applies_total by result.
-// result ∈ {applied, parse_error}.
+// result ∈ {applied, partial, parse_error}:
+//   - applied:     all entries parsed successfully
+//   - partial:     some entries parsed, some failed
+//   - parse_error: every entry failed to parse
 func RecordApply(result string) { applies.WithLabelValues(result).Inc() }
 
 // RecordStatusPatch increments status_patches_total by result.

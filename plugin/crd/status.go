@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/util/workqueue"
 
 	"github.com/hbinhng/coredns-crd/internal/index"
+	"github.com/hbinhng/coredns-crd/internal/metrics"
 )
 
 type statusEvent struct {
@@ -188,5 +189,10 @@ func (s *statusUpdater) process(ctx context.Context, ev statusEvent) error {
 	_, err = s.client.Resource(dnsSliceGVR).
 		Namespace(ev.namespace).
 		Patch(ctx, ev.name, types.MergePatchType, data, metav1.PatchOptions{}, "status")
+	if err != nil {
+		metrics.RecordStatusPatch("error")
+	} else {
+		metrics.RecordStatusPatch("success")
+	}
 	return err
 }

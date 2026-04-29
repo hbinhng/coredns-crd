@@ -10,6 +10,9 @@ import (
 
 	"github.com/coredns/coredns/plugin/pkg/fall"
 	"github.com/miekg/dns"
+	"github.com/prometheus/client_golang/prometheus/testutil"
+
+	"github.com/hbinhng/coredns-crd/internal/metrics"
 )
 
 // ---------- stubs ----------
@@ -54,6 +57,7 @@ func query(name string, qtype uint16) *dns.Msg {
 // ---------- ServeDNS ----------
 
 func TestServeDNS_Hit_AReturnsAnswer(t *testing.T) {
+	metrics.ResetForTest()
 	h, _ := newHandler(t)
 	h.applySlice(mkSlice("ns", "n", "u1", time.Unix(0, 0), 1,
 		aRecord("foo.example.com.", "1.2.3.4"),
@@ -87,6 +91,9 @@ func TestServeDNS_Hit_AReturnsAnswer(t *testing.T) {
 	}
 	if w.msg.Authoritative {
 		t.Errorf("AA bit set, want clear (non-authoritative plugin)")
+	}
+	if got := testutil.ToFloat64(metrics.LookupsForTest("hit")); got != 1 {
+		t.Errorf("metrics.lookups{hit}=%v, want 1", got)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	apiv1 "github.com/hbinhng/coredns-crd/api/v1alpha1"
+	"github.com/hbinhng/coredns-crd/internal/metrics"
 )
 
 func (h *Handler) eventHandler() cache.ResourceEventHandler {
@@ -59,6 +60,20 @@ func (h *Handler) applySlice(slice *apiv1.DNSSlice) {
 	log.Infof("applied DNSSlice %s/%s: won=%d lost=%d errors=%d siblings=%d",
 		slice.Namespace, slice.Name,
 		len(primary.Won), len(primary.Lost), len(primary.ParseErrors), len(siblings))
+
+	parsed := len(primary.Won) + len(primary.Lost)
+	switch {
+	case len(primary.ParseErrors) > 0 && parsed > 0:
+		metrics.RecordApply("partial")
+	case len(primary.ParseErrors) > 0:
+		metrics.RecordApply("parse_error")
+	default:
+		metrics.RecordApply("applied")
+	}
+	if dir := h.emitter.OnApply(slice, primary); dir != "" {
+		metrics.RecordConflictTransition(dir)
+	}
+
 	if h.statusUpdater == nil {
 		return
 	}
@@ -71,6 +86,7 @@ func (h *Handler) applySlice(slice *apiv1.DNSSlice) {
 func (h *Handler) deleteSlice(slice *apiv1.DNSSlice) {
 	siblings := h.idx.Delete(slice.Namespace, slice.Name)
 	log.Infof("deleted DNSSlice %s/%s: siblings=%d", slice.Namespace, slice.Name, len(siblings))
+	h.emitter.OnDelete(slice)
 	if h.statusUpdater == nil {
 		return
 	}
