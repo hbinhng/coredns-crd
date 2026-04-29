@@ -12,15 +12,22 @@ import (
 	"github.com/coredns/coredns/plugin/pkg/fall"
 	clog "github.com/coredns/coredns/plugin/pkg/log"
 
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/kubernetes"
+	typedcorev1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/tools/record"
 
+	apiv1 "github.com/hbinhng/coredns-crd/api/v1alpha1"
+	"github.com/hbinhng/coredns-crd/internal/events"
 	"github.com/hbinhng/coredns-crd/internal/leader"
+	"github.com/hbinhng/coredns-crd/internal/metrics"
 )
 
 const pluginName = "crd"
@@ -75,6 +82,24 @@ func setup(c *caddy.Controller) error {
 
 	h := New(cfg)
 
+	// Build EventBroadcaster + Recorder once for the lifetime of this pod;
+	// hand the recorder to the emitter that fires Events on conflict
+	// transitions.
+	scheme := runtime.NewScheme()
+	if err := apiv1.AddToScheme(scheme); err != nil {
+		return plugin.Error(pluginName, fmt.Errorf("register scheme: %w", err))
+	}
+	broadcaster := record.NewBroadcaster()
+	broadcaster.StartStructuredLogging(0)
+	broadcaster.StartRecordingToSink(&typedcorev1.EventSinkImpl{
+		Interface: clientset.CoreV1().Events(""),
+	})
+	recorder := broadcaster.NewRecorder(scheme, corev1.EventSource{Component: "coredns-crd"})
+	h.emitter = events.NewEmitter(recorder)
+
+	// Wire the Index size observer for the metric gauges.
+	h.idx.SetSizeObserver(metrics.RecordIndexSize)
+
 	isLeader, elector, err := buildLeaderElection(cfg.LeaderElection, clientset, h)
 	if err != nil {
 		return plugin.Error(pluginName, err)
@@ -105,6 +130,7 @@ func setup(c *caddy.Controller) error {
 		if h.cancel != nil {
 			h.cancel()
 		}
+		broadcaster.Shutdown()
 		return nil
 	})
 
@@ -194,6 +220,7 @@ func parseLeaderElection(c *caddy.Controller, le *LeaderElectionConfig) error {
 func buildLeaderElection(cfg LeaderElectionConfig, clientset kubernetes.Interface, h *Handler) (func() bool, *leader.Elector, error) {
 	if cfg.Disabled {
 		log.Warning("leader election disabled; every replica will write status (race-prone)")
+		metrics.SetLeader(true) // disabled mode = everyone is "leader"
 		return alwaysLeader, nil, nil
 	}
 	ns := cfg.Namespace
@@ -212,13 +239,21 @@ func buildLeaderElection(cfg LeaderElectionConfig, clientset kubernetes.Interfac
 		identity = "coredns-crd"
 	}
 	onStarted, onStopped, onNew := leaderCallbacks(h)
+	wrappedStarted := func(ctx context.Context) {
+		metrics.SetLeader(true)
+		onStarted(ctx)
+	}
+	wrappedStopped := func() {
+		onStopped()
+		metrics.SetLeader(false)
+	}
 	elector, err := leader.New(leader.Config{
 		Client:           clientset,
 		LeaseNamespace:   ns,
 		LeaseName:        name,
 		Identity:         identity,
-		OnStartedLeading: onStarted,
-		OnStoppedLeading: onStopped,
+		OnStartedLeading: wrappedStarted,
+		OnStoppedLeading: wrappedStopped,
 		OnNewLeader:      onNew,
 	})
 	if err != nil {
