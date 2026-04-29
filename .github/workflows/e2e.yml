@@ -43,11 +43,31 @@ jobs:
         with:
           version: v3.15.4
       - name: Run e2e
-        run: bash test/e2e/run.sh
+        run: |
+          set -o pipefail
+          bash test/e2e/run.sh 2>&1 | tee /tmp/e2e.log
       - name: Diagnostics on failure
         if: failure()
         run: |
-          kubectl get pods -A -o wide || true
-          kubectl -n kube-system describe pods -l k8s-app=kube-dns || true
-          kubectl -n kube-system logs -l k8s-app=kube-dns --tail=100 || true
-          kubectl get events -A --sort-by='.lastTimestamp' | tail -50 || true
+          {
+            echo '## e2e run.sh output (tail)'
+            echo '```'
+            tail -200 /tmp/e2e.log 2>/dev/null || echo '(no log captured)'
+            echo '```'
+            echo '## kubectl get pods -A'
+            echo '```'
+            kubectl get pods -A -o wide 2>&1 || true
+            echo '```'
+            echo '## kube-dns pods (describe)'
+            echo '```'
+            kubectl -n kube-system describe pods -l k8s-app=kube-dns 2>&1 || true
+            echo '```'
+            echo '## kube-dns pods (logs)'
+            echo '```'
+            kubectl -n kube-system logs -l k8s-app=kube-dns --tail=100 --all-containers 2>&1 || true
+            echo '```'
+            echo '## recent events'
+            echo '```'
+            kubectl get events -A --sort-by='.lastTimestamp' 2>&1 | tail -80 || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
