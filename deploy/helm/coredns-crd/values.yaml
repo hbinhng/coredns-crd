@@ -1,0 +1,89 @@
+# Default values for coredns-crd. Override with --set or -f.
+
+nameOverride: ""
+fullnameOverride: ""
+
+replicaCount: 2
+
+image:
+  repository: ghcr.io/hbinhng/coredns-crd
+  # tag defaults to .Chart.AppVersion when empty
+  tag: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 70Mi
+  limits:
+    memory: 200Mi
+
+service:
+  type: ClusterIP
+  # When replacing kube-dns, set clusterIP explicitly so kubelet's
+  # --cluster-dns flag points at us. e.g. 10.96.0.10 (kubeadm) or
+  # 10.43.0.10 (k3s). Empty = let the API server allocate.
+  clusterIP: ""
+  ports:
+    dns: 53
+    dnsTcp: 53
+    metrics: 9153
+  annotations:
+    prometheus.io/port: "9153"
+    prometheus.io/scrape: "true"
+
+leaderElection:
+  enabled: true
+  # namespace defaults to release namespace via downward API
+  namespace: ""
+  leaseName: coredns-crd-leader
+
+corefile:
+  zones: [".:53"]
+  errors: true
+  health:
+    enabled: true
+    lameduck: 5s
+  ready: true
+  crd:
+    fallthrough: true
+  kubernetes:
+    enabled: true
+    cluster: cluster.local
+    pods: insecure
+    fallthroughZones: ["in-addr.arpa", "ip6.arpa"]
+    ttl: 30
+  prometheus:
+    listen: ":9153"
+  forward:
+    upstream: /etc/resolv.conf
+    maxConcurrent: 1000
+  cache:
+    ttl: 30
+  loop: true
+  reload: true
+  loadbalance: true
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+topologySpreadConstraints:
+  enabled: true
+  maxSkew: 1
+  topologyKey: kubernetes.io/hostname
+  whenUnsatisfiable: ScheduleAnyway
+
+tolerations:
+  - key: CriticalAddonsOnly
+    operator: Exists
+  - key: node-role.kubernetes.io/control-plane
+    operator: Exists
+    effect: NoSchedule
+
+nodeSelector:
+  kubernetes.io/os: linux
+
+priorityClassName: system-cluster-critical
