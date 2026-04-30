@@ -67,3 +67,27 @@ tests:
       - matchRegex:
           path: data.Corefile
           pattern: '(?m)^\s+crd\s*\{'
+
+  - it: standalone overlay (-f values-standalone.yaml) renders without kubernetes and without forward
+    values:
+      - ../values-standalone.yaml
+    asserts:
+      - notMatchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s*kubernetes\s'
+      - notMatchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s*forward\s+\.'
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+crd\s*\{'
+
+  - it: standalone overlay + explicit upstreams renders forward block
+    values:
+      - ../values-standalone.yaml
+    set:
+      corefile.forward.upstreams: [1.1.1.1]
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+forward\s+\.\s+1\.1\.1\.1\s*\{'

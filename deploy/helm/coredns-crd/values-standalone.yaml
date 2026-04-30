@@ -1,0 +1,40 @@
+# Standalone deployment overlay for coredns-crd.
+#
+# Pass to `helm install -f deploy/helm/coredns-crd/values-standalone.yaml`
+# to run coredns-crd side-by-side with the cluster's existing CoreDNS as
+# a declarative authoritative DNS server, rather than as the cluster's
+# tier-0 DNS replacement.
+#
+# See README "Deployment modes" for ingress recipes (stub-domain via
+# main CoreDNS, per-pod dnsConfig, hostNetwork, LoadBalancer, NodePort).
+
+corefile:
+  kubernetes:
+    # No `kubernetes` plugin block — the cluster's existing CoreDNS
+    # owns cluster.local resolution.
+    enabled: false
+  forward:
+    # Authoritative-only by default. Set this to a non-empty list to
+    # enable recursion (e.g. [1.1.1.1, 9.9.9.9]). If you also enable
+    # service.loadBalancer below, you MUST set allowPublicRecursion: true
+    # to acknowledge the open-resolver risk.
+    upstreams: []
+    # Override the legacy back-compat default to match upstreams: [].
+    upstream: ""
+    allowPublicRecursion: false
+
+# The chart's default Service is ClusterIP and has no fullnameOverride,
+# so it does not collide with kube-dns. No further overrides needed for
+# the basic in-cluster install. For out-of-cluster ingress, uncomment one
+# of the blocks below (or pass a second -f my-overrides.yaml).
+
+# service:
+#   loadBalancer:
+#     enabled: true
+#     externalTrafficPolicy: Local
+#     annotations:
+#       networking.gke.io/load-balancer-type: Internal
+
+# hostNetwork:
+#   enabled: true
+#   dnsPolicy: ClusterFirstWithHostNet
