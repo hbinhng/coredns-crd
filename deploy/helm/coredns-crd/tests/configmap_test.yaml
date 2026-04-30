@@ -1,0 +1,33 @@
+suite: configmap (Corefile)
+templates:
+  - configmap.yaml
+
+tests:
+  - it: default values render the cluster-DNS Corefile (regression baseline)
+    asserts:
+      - equal:
+          path: data.Corefile
+          value: |
+            .:53 {
+                errors
+                health {
+                  lameduck 5s
+                }
+                ready
+                crd {
+                  fallthrough
+                }
+                kubernetes cluster.local in-addr.arpa ip6.arpa {
+                  pods insecure
+                  fallthrough in-addr.arpa ip6.arpa
+                  ttl 30
+                }
+                prometheus :9153
+                forward . /etc/resolv.conf {
+                  max_concurrent 1000
+                }
+                cache 30
+                loop
+                reload
+                loadbalance
+            }

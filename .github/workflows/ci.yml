@@ -51,6 +51,10 @@ jobs:
           curl -fsSL https://github.com/yannh/kubeconform/releases/latest/download/kubeconform-linux-amd64.tar.gz \
             | sudo tar xz -C /usr/local/bin kubeconform
       - run: helm lint deploy/helm/coredns-crd
+      - name: Install helm-unittest plugin
+        run: helm plugin install https://github.com/helm-unittest/helm-unittest --version v0.6.2
+      - name: Run helm-unittest
+        run: helm unittest deploy/helm/coredns-crd
       - name: Render + kubeconform
         run: |
           helm template coredns-crd deploy/helm/coredns-crd \

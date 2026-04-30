@@ -1,0 +1,45 @@
+suite: service (ClusterIP)
+templates:
+  - service.yaml
+
+tests:
+  - it: default values render a ClusterIP Service with three named ports
+    asserts:
+      - equal:
+          path: spec.type
+          value: ClusterIP
+      - equal:
+          path: spec.ports[0].name
+          value: dns
+      - equal:
+          path: spec.ports[0].port
+          value: 53
+      - equal:
+          path: spec.ports[0].protocol
+          value: UDP
+      - equal:
+          path: spec.ports[1].name
+          value: dns-tcp
+      - equal:
+          path: spec.ports[1].port
+          value: 53
+      - equal:
+          path: spec.ports[1].protocol
+          value: TCP
+      - equal:
+          path: spec.ports[2].name
+          value: metrics
+      - equal:
+          path: spec.ports[2].port
+          value: 9153
+      - equal:
+          path: spec.ports[2].protocol
+          value: TCP
+
+  - it: clusterIP value is propagated when set
+    set:
+      service.clusterIP: 10.96.0.10
+    asserts:
+      - equal:
+          path: spec.clusterIP
+          value: 10.96.0.10
