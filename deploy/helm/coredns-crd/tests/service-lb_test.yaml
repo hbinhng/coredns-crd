@@ -11,6 +11,7 @@ tests:
   - it: service.loadBalancer.enabled=true — renders LoadBalancer Service
     set:
       service.loadBalancer.enabled: true
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - hasDocuments:
           count: 1
@@ -45,6 +46,7 @@ tests:
     set:
       service.loadBalancer.enabled: true
       service.loadBalancer.loadBalancerClass: kube-vip.io/kube-vip-class
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - equal:
           path: spec.loadBalancerClass
@@ -54,6 +56,7 @@ tests:
     set:
       service.loadBalancer.enabled: true
       service.loadBalancer.loadBalancerIP: 192.168.1.53
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - equal:
           path: spec.loadBalancerIP
@@ -64,6 +67,7 @@ tests:
       service.loadBalancer.enabled: true
       service.loadBalancer.annotations:
         networking.gke.io/load-balancer-type: Internal
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - equal:
           path: metadata.annotations["networking.gke.io/load-balancer-type"]
@@ -73,6 +77,7 @@ tests:
     set:
       service.loadBalancer.enabled: true
       service.loadBalancer.externalTrafficPolicy: Cluster
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - equal:
           path: spec.externalTrafficPolicy
@@ -81,6 +86,7 @@ tests:
   - it: name suffix distinguishes from ClusterIP service
     set:
       service.loadBalancer.enabled: true
+      corefile.forward.allowPublicRecursion: true
     asserts:
       - matchRegex:
           path: metadata.name

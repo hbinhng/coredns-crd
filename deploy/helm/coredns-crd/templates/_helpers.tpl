@@ -73,3 +73,20 @@ k8s-app: kube-dns
 {{- define "coredns-crd.kubernetesEnabled" -}}
 {{- if .Values.corefile.kubernetes.enabled -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+  publicLBRecursionGuard: fails template rendering when:
+    - service.loadBalancer.enabled is true, AND
+    - the forward block would emit non-empty upstreams, AND
+    - corefile.forward.allowPublicRecursion is false.
+  Prevents accidentally shipping an open recursive DNS resolver to the
+  public internet (DDoS amplification risk). Users who want recursion
+  on a confirmed-internal LB must set allowPublicRecursion: true.
+*/}}
+{{- define "coredns-crd.publicLBRecursionGuard" -}}
+{{- if and .Values.service.loadBalancer.enabled (include "coredns-crd.forwardEnabled" .) -}}
+{{- if not .Values.corefile.forward.allowPublicRecursion -}}
+{{- fail (printf "Refusing to render: enabling service.loadBalancer (LoadBalancer Service) together with corefile.forward.upstreams (recursive forwarding) would expose an open recursive resolver if the LB is internet-reachable. If this LB is internal-only (e.g. networking.gke.io/load-balancer-type: Internal, service.beta.kubernetes.io/aws-load-balancer-internal: \"true\", or a private-network MetalLB pool), set corefile.forward.allowPublicRecursion: true to confirm. Otherwise, remove corefile.forward.upstreams and corefile.forward.upstream.") -}}
+{{- end -}}
+{{- end -}}
+{{- end -}}

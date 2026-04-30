@@ -1,0 +1,53 @@
+suite: public-LB recursion guard
+templates:
+  - service-lb.yaml
+
+tests:
+  - it: LB enabled + no forward upstreams = no guard fire (OK)
+    set:
+      service.loadBalancer.enabled: true
+      corefile.forward.upstream: ""
+      corefile.forward.upstreams: []
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: LB enabled + upstreams + allowPublicRecursion=true = no guard fire
+    set:
+      service.loadBalancer.enabled: true
+      corefile.forward.upstreams: [1.1.1.1]
+      corefile.forward.allowPublicRecursion: true
+    asserts:
+      - hasDocuments:
+          count: 1
+      - equal:
+          path: spec.type
+          value: LoadBalancer
+
+  - it: LB enabled + legacy upstream + allowPublicRecursion=false = guard fires
+    set:
+      service.loadBalancer.enabled: true
+      # Default values keep upstream=/etc/resolv.conf, allowPublicRecursion=false
+    asserts:
+      - failedTemplate:
+          errorPattern: open recursive resolver
+
+  - it: LB enabled + new upstreams + allowPublicRecursion=false = guard fires
+    set:
+      service.loadBalancer.enabled: true
+      corefile.forward.upstreams: [1.1.1.1]
+      corefile.forward.allowPublicRecursion: false
+    asserts:
+      - failedTemplate:
+          errorPattern: open recursive resolver
+
+  - it: LB disabled + upstreams + allowPublicRecursion=false = no guard fire
+    set:
+      service.loadBalancer.enabled: false
+      corefile.forward.upstreams: [1.1.1.1]
+    asserts:
+      - hasDocuments:
+          count: 0
