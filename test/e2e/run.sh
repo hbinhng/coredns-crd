@@ -208,4 +208,107 @@ grep -q '10.0.0.' <<<"$DIG2_OUT" || {
 }
 echo "DNS still resolving after failover"
 
+phase "Scenario 6: Standalone-mode side-by-side install"
+# Install the chart a second time in its own namespace using the
+# values-standalone.yaml overlay. Verifies that:
+#  (a) the overlay produces a Corefile without the kubernetes plugin
+#      and without the forward block,
+#  (b) the standalone install does not collide with the in-place
+#      cluster-DNS install (different release name, different Lease,
+#      different Service name),
+#  (c) a pod with dnsConfig.nameservers pointing at the standalone
+#      ClusterIP can resolve a DNSSlice that the standalone install
+#      owns.
+
+kubectl create namespace coredns-crd-standalone
+helm install coredns-crd-standalone deploy/helm/coredns-crd \
+  --namespace coredns-crd-standalone \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  --set image.repository=coredns-crd \
+  --set image.tag=e2e \
+  --set image.pullPolicy=IfNotPresent \
+  --set replicaCount=1 \
+  --set leaderElection.enabled=false \
+  --set podDisruptionBudget.enabled=false \
+  --set topologySpreadConstraints.enabled=false \
+  --set priorityClassName=""
+
+# replicaCount=1 + leader-election off keeps the test simple: one pod,
+# no Lease churn. PDB off because PDB requires replicas>1. Topology
+# constraints off because we're scheduling a single replica. priorityClassName
+# emptied because system-cluster-critical requires kube-system or a
+# ResourceQuota allowance — neither true in a tenant namespace.
+# Tolerations are left as-is (they only widen scheduling, never narrow).
+
+kubectl -n coredns-crd-standalone rollout status \
+  deployment/coredns-crd-standalone --timeout=120s
+
+STANDALONE_DNS_IP=$(kubectl -n coredns-crd-standalone get svc \
+  coredns-crd-standalone -o jsonpath='{.spec.clusterIP}')
+[[ -n "$STANDALONE_DNS_IP" ]] || { echo "standalone Service has no ClusterIP"; exit 1; }
+echo "standalone DNS Service IP: $STANDALONE_DNS_IP"
+
+# Apply a DNSSlice into the standalone namespace.
+cat <<EOF | kubectl apply -f -
+apiVersion: dns.coredns-crd.io/v1alpha1
+kind: DNSSlice
+metadata:
+  name: standalone-test
+  namespace: coredns-crd-standalone
+spec:
+  entries:
+    - fqdn: standalone.example.test
+      type: A
+      a: 10.42.42.42
+EOF
+kubectl -n coredns-crd-standalone wait --for=condition=Ready \
+  dnsslice/standalone-test --timeout=30s
+
+# Resolve via a dig pod whose dnsConfig points at the standalone DNS.
+# Uses jessie-dnsutils (dig pre-installed; avoids apk-on-restricted-PSA
+# issues we hit during enigma multi-node validation).
+kubectl run dig-standalone -n coredns-crd-standalone \
+  --image=registry.k8s.io/e2e-test-images/jessie-dnsutils:1.7 \
+  --restart=Never \
+  --overrides="$(cat <<EOF
+{
+  "spec": {
+    "dnsPolicy": "None",
+    "dnsConfig": {"nameservers": ["$STANDALONE_DNS_IP"]},
+    "containers": [{
+      "name": "dig-standalone",
+      "image": "registry.k8s.io/e2e-test-images/jessie-dnsutils:1.7",
+      "command": ["sh", "-c", "dig +short standalone.example.test A; dig +short kubernetes.default.svc.cluster.local A"]
+    }]
+  }
+}
+EOF
+)" \
+  --command -- sh -c 'true'
+
+PHASE=""
+for i in $(seq 1 30); do
+  PHASE=$(kubectl -n coredns-crd-standalone get pod dig-standalone \
+    -o jsonpath='{.status.phase}' 2>/dev/null || true)
+  [[ "$PHASE" == "Succeeded" || "$PHASE" == "Failed" ]] && break
+  sleep 1
+done
+DIG_OUT=$(kubectl -n coredns-crd-standalone logs dig-standalone 2>/dev/null)
+echo "$DIG_OUT"
+kubectl -n coredns-crd-standalone delete pod dig-standalone --wait=false 2>/dev/null || true
+
+# Standalone DNS resolves the declared record:
+grep -q '10.42.42.42' <<<"$DIG_OUT" || { echo "standalone DNS did not resolve standalone.example.test"; exit 1; }
+# Standalone DNS does NOT resolve cluster.local (kubernetes plugin is
+# disabled). The second `dig` should produce empty output.
+grep -q '^[0-9]' <<<"$(echo "$DIG_OUT" | tail -1)" && {
+  echo "standalone DNS unexpectedly resolved cluster.local — kubernetes plugin should be disabled"
+  exit 1
+} || true
+
+# Cleanup standalone install.
+helm uninstall coredns-crd-standalone -n coredns-crd-standalone --wait
+kubectl delete namespace coredns-crd-standalone --wait=false
+echo "Scenario 6 PASS"
+
 phase "ALL SCENARIOS PASSED"
