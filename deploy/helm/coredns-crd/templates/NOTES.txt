@@ -1,8 +1,59 @@
 coredns-crd installed.
 
+{{- if include "coredns-crd.kubernetesEnabled" . }}
+
+Mode: cluster-DNS replacement
+The kubernetes plugin is enabled — this install owns cluster.local
+resolution. Ensure your kubelet's --cluster-dns points at:
+  ClusterIP: {{ default "<allocated by API server>" .Values.service.clusterIP }}
+{{- else }}
+
+Mode: standalone (declarative DNS server)
+The kubernetes plugin is disabled — this install resolves only
+DNSSlice records. The cluster's existing CoreDNS still owns
+cluster.local resolution.
+
+Ingress recipes:
+
+  Stub-domain via main CoreDNS (most common):
+    Forward a zone like internal.lan to our ClusterIP from the
+    cluster's main CoreDNS Corefile. See README "Deployment modes"
+    for kubeadm / k3s / RKE2 / Talos snippets.
+
+  Per-pod dnsConfig:
+    spec:
+      dnsPolicy: None
+      dnsConfig:
+        nameservers: [<our-ClusterIP>]
+        searches: [internal.lan]
+{{- end }}
+
 Service: {{ include "coredns-crd.fullname" . }} (namespace {{ .Release.Namespace }})
 {{- with .Values.service.clusterIP }}
 ClusterIP: {{ . }}
+{{- end }}
+
+{{- if .Values.service.loadBalancer.enabled }}
+
+LoadBalancer Service: {{ include "coredns-crd.fullname" . }}-lb
+  Get external IP:
+    kubectl -n {{ .Release.Namespace }} get svc {{ include "coredns-crd.fullname" . }}-lb -o jsonpath='{.status.loadBalancer.ingress[0].ip}'
+{{- if include "coredns-crd.forwardEnabled" . }}
+{{- if .Values.corefile.forward.allowPublicRecursion }}
+
+WARNING: corefile.forward.allowPublicRecursion is true and the
+LoadBalancer is enabled with recursion. If this LB is reachable from
+the public internet, you have shipped an open recursive resolver
+(DDoS amplification risk). Confirm the LB is internal-only.
+{{- end }}
+{{- end }}
+{{- end }}
+
+{{- if .Values.hostNetwork.enabled }}
+
+hostNetwork is enabled — the pod runs in the node's network namespace.
+Each node IP is a DNS server on :53. NetworkPolicy does NOT apply to
+hostNetwork pods.
 {{- end }}
 
 Verify resolution from a debug pod:
