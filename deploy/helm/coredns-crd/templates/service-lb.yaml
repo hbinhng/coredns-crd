@@ -1,0 +1,31 @@
+{{- if .Values.service.loadBalancer.enabled -}}
+{{- include "coredns-crd.publicLBRecursionGuard" . -}}
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "coredns-crd.fullname" . }}-lb
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "coredns-crd.labels" . | nindent 4 }}
+    coredns-crd.io/service-role: load-balancer
+  {{- with .Values.service.loadBalancer.annotations }}
+  annotations: {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: LoadBalancer
+  externalTrafficPolicy: {{ .Values.service.loadBalancer.externalTrafficPolicy }}
+  {{- with .Values.service.loadBalancer.loadBalancerClass }}
+  loadBalancerClass: {{ . }}
+  {{- end }}
+  {{- with .Values.service.loadBalancer.loadBalancerIP }}
+  loadBalancerIP: {{ . }}
+  {{- end }}
+  selector: {{- include "coredns-crd.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: dns
+      port: {{ .Values.service.ports.dns }}
+      protocol: UDP
+    - name: dns-tcp
+      port: {{ .Values.service.ports.dnsTcp }}
+      protocol: TCP
+{{- end }}

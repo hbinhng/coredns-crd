@@ -41,6 +41,24 @@ service:
   annotations:
     prometheus.io/port: "9153"
     prometheus.io/scrape: "true"
+  loadBalancer:
+    # Render a second Service of type LoadBalancer pointing at the same
+    # Deployment. Useful for exposing DNS to clients outside the cluster.
+    # The metrics port is intentionally excluded from the LB Service.
+    enabled: false
+    # `Local` preserves the client source IP; `Cluster` SNATs through any
+    # node. DNS access policies and audit logging want `Local`.
+    externalTrafficPolicy: Local
+    # Optional. Useful for MetalLB / kube-vip / Cilium L2 announcement.
+    loadBalancerClass: ""
+    # Optional. Most cloud providers ignore this; useful for bare-metal
+    # LB controllers that honor it.
+    loadBalancerIP: ""
+    # Optional. Common values:
+    #   networking.gke.io/load-balancer-type: Internal
+    #   service.beta.kubernetes.io/aws-load-balancer-internal: "true"
+    #   metallb.io/loadBalancerIPs: "192.168.1.53"
+    annotations: {}
 
 leaderElection:
   enabled: true
