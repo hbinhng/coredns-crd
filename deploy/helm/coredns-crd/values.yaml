@@ -117,4 +117,15 @@ tolerations:
 nodeSelector:
   kubernetes.io/os: linux
 
+hostNetwork:
+  # Run pods in the node's network namespace. Each node IP becomes a
+  # DNS server on :53. Useful for homelab / bare-metal / "router uses
+  # these IPs as upstream DNS." Requires that no other process on the
+  # node binds :53. NetworkPolicy does not apply to hostNetwork pods.
+  enabled: false
+  # When hostNetwork is enabled, dnsPolicy must be set explicitly so the
+  # pod's own DNS resolution still works. ClusterFirstWithHostNet keeps
+  # cluster.local resolvable from inside the pod.
+  dnsPolicy: ClusterFirstWithHostNet
+
 priorityClassName: system-cluster-critical

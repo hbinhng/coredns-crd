@@ -94,7 +94,12 @@ spec:
               path: /ready
               port: 8181
               scheme: HTTP
+      {{- if .Values.hostNetwork.enabled }}
+      hostNetwork: true
+      dnsPolicy: {{ .Values.hostNetwork.dnsPolicy }}
+      {{- else }}
       dnsPolicy: Default
+      {{- end }}
       volumes:
         - name: config-volume
           configMap:

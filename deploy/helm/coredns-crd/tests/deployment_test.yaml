@@ -1,0 +1,39 @@
+suite: deployment
+templates:
+  - deployment.yaml
+  - configmap.yaml
+
+tests:
+  - it: default — hostNetwork is unset and dnsPolicy is Default
+    template: deployment.yaml
+    asserts:
+      - notExists:
+          path: spec.template.spec.hostNetwork
+      - equal:
+          path: spec.template.spec.dnsPolicy
+          value: Default
+
+  - it: hostNetwork.enabled=true — sets hostNetwork and dnsPolicy
+    set:
+      hostNetwork.enabled: true
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+      - equal:
+          path: spec.template.spec.dnsPolicy
+          value: ClusterFirstWithHostNet
+
+  - it: hostNetwork.enabled=true with custom dnsPolicy override
+    set:
+      hostNetwork.enabled: true
+      hostNetwork.dnsPolicy: None
+    template: deployment.yaml
+    asserts:
+      - equal:
+          path: spec.template.spec.hostNetwork
+          value: true
+      - equal:
+          path: spec.template.spec.dnsPolicy
+          value: None
