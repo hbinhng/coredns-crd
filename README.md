@@ -40,21 +40,198 @@ chart can fully replace `kube-dns`/`coredns` as cluster DNS.
 Supported record types: **A, AAAA, CNAME, TXT, SRV**, plus a `Raw`
 escape hatch for arbitrary RFC 1035 strings.
 
-## Install
+## Deployment modes
 
-```
-helm install coredns-crd \
-  oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
-  --version 0.1.0 \
+coredns-crd ships two deployment shapes:
+
+1. **Cluster-DNS replacement** *(default)* — coredns-crd becomes the cluster's DNS server. Replaces the in-cluster CoreDNS. Single source of truth for `cluster.local` and DNSSlice records.
+2. **Standalone DNS server** *(opt-in via overlay)* — coredns-crd runs side-by-side with the cluster's existing CoreDNS as a declarative authoritative DNS server. The cluster's CoreDNS still owns `cluster.local`; coredns-crd answers only for the FQDNs declared in DNSSlice CRDs.
+
+### Mode 1: Cluster-DNS replacement
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
   --namespace kube-system \
-  --set service.clusterIP=10.96.0.10        # kubeadm; k3s uses 10.43.0.10
+  --set fullnameOverride=kube-dns \
+  --set service.clusterIP=10.96.0.10   # match your cluster's --cluster-dns
 ```
 
-To replace the cluster's existing DNS Service, set
-`fullnameOverride: kube-dns`. See the
-[chart README](deploy/helm/coredns-crd/README.md) for the full values
-reference, replacement instructions, and hardening notes (NetworkPolicy,
-RBAC scoping).
+Replace `10.96.0.10` with `kubectl -n kube-system get svc kube-dns -o jsonpath='{.spec.clusterIP}'`. The chart owns the `kube-dns` Service and ConfigMap; you must remove the cluster's existing `coredns` Deployment first (or the install will collide).
+
+### Mode 2: Standalone DNS server
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  --namespace coredns-crd \
+  --create-namespace \
+  -f deploy/helm/coredns-crd/values-standalone.yaml
+```
+
+The overlay disables the `kubernetes` plugin (cluster's CoreDNS owns `cluster.local`) and disables forwarding (authoritative-only). Apps that should resolve via coredns-crd need an ingress path — pick from the recipes below.
+
+#### Ingress recipes (Mode 2)
+
+##### Stub-domain via the cluster's main CoreDNS *(recommended)*
+
+The cluster's main CoreDNS forwards a zone to coredns-crd. Apps need zero changes — `foo.internal.lan` just resolves.
+
+Get coredns-crd's ClusterIP:
+
+```bash
+DNS_IP=$(kubectl -n coredns-crd get svc coredns-crd -o jsonpath='{.spec.clusterIP}')
+echo $DNS_IP
+```
+
+Add this stanza to your cluster's main CoreDNS Corefile:
+
+```
+internal.lan:53 {
+  forward . <DNS_IP>
+}
+```
+
+Distro-specific snippets:
+
+- **kubeadm / KinD / Talos:** edit the `kube-system/coredns` ConfigMap directly:
+  ```bash
+  kubectl -n kube-system edit configmap coredns
+  # Add the stanza above, then:
+  kubectl -n kube-system rollout restart deployment/coredns
+  ```
+
+- **k3s:** create a `coredns-custom` ConfigMap (k3s's CoreDNS reads it automatically):
+  ```yaml
+  apiVersion: v1
+  kind: ConfigMap
+  metadata:
+    name: coredns-custom
+    namespace: kube-system
+  data:
+    internal.server: |
+      internal.lan:53 {
+        forward . <DNS_IP>
+      }
+  ```
+
+- **RKE2:** create a `HelmChartConfig` to patch `rke2-coredns`:
+  ```yaml
+  apiVersion: helm.cattle.io/v1
+  kind: HelmChartConfig
+  metadata:
+    name: rke2-coredns
+    namespace: kube-system
+  spec:
+    valuesContent: |-
+      servers:
+      - zones:
+        - zone: .
+        port: 53
+        plugins:
+        - name: errors
+        - name: health
+        - name: ready
+        - name: kubernetes
+          parameters: cluster.local in-addr.arpa ip6.arpa
+          configBlock: |-
+            pods insecure
+            fallthrough in-addr.arpa ip6.arpa
+            ttl 30
+        - name: prometheus
+          parameters: 0.0.0.0:9153
+        - name: forward
+          parameters: . /etc/resolv.conf
+        - name: cache
+          parameters: 30
+        - name: loop
+        - name: reload
+        - name: loadbalance
+      - zones:
+        - zone: internal.lan
+        port: 53
+        plugins:
+        - name: forward
+          parameters: . <DNS_IP>
+  ```
+
+##### Per-pod `dnsConfig.nameservers`
+
+When you can't touch the cluster's main CoreDNS:
+
+```yaml
+apiVersion: v1
+kind: Pod
+metadata:
+  name: app
+spec:
+  dnsPolicy: None
+  dnsConfig:
+    nameservers: [<DNS_IP>]
+    searches: [internal.lan, svc.cluster.local, cluster.local]
+    options:
+      - name: ndots
+        value: "5"
+  containers:
+    - name: app
+      image: my-app:latest
+```
+
+##### hostNetwork (node IPs as DNS servers)
+
+For homelab, bare-metal, or any "my router uses node IPs as upstream DNS" setup:
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  --set hostNetwork.enabled=true
+```
+
+Each node's IP becomes a DNS server on `:53`. NetworkPolicy does NOT apply to hostNetwork pods. Replicas must not exceed the number of schedulable nodes (port 53 conflicts).
+
+##### LoadBalancer Service (out-of-cluster clients)
+
+For internal LANs, other clusters, or external devices:
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  --set service.loadBalancer.enabled=true \
+  --set 'service.loadBalancer.annotations.networking\.gke\.io/load-balancer-type=Internal'
+```
+
+Cloud-provider annotations:
+
+| Cloud | Annotation |
+|---|---|
+| GKE | `networking.gke.io/load-balancer-type: Internal` |
+| EKS | `service.beta.kubernetes.io/aws-load-balancer-internal: "true"` and `service.beta.kubernetes.io/aws-load-balancer-type: nlb` (NLB handles UDP+TCP) |
+| AKS | `service.beta.kubernetes.io/azure-load-balancer-internal: "true"` |
+| MetalLB | `metallb.io/loadBalancerIPs: 192.168.1.53` |
+
+Sharp edges:
+- **UDP+TCP on the same LB IP**: AWS classic ELB does not support mixed-protocol Services. Use NLB. GCP requires separate forwarding rules; the rendered Service works on GKE but you may need a second Service-per-protocol on bare GCP TCP/UDP LBs.
+- **Public exposure**: if your LB is reachable from the public internet, do NOT enable `corefile.forward.upstreams` (open recursive resolver = DDoS amplification). The chart enforces this with a render-time guard; setting `corefile.forward.allowPublicRecursion: true` opts out of the guard, only do this for internal-only LBs.
+
+##### NodePort
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  --set service.type=NodePort
+```
+
+The default NodePort range is `30000–32767`, which is wrong for clients expecting `:53`. Pinning to `:53` requires `--service-node-port-range=53-32767` cluster-side. Most clusters don't widen this; prefer hostNetwork or LoadBalancer.
+
+#### Recipe matrix
+
+| Use case | Recommended ingress |
+|---|---|
+| "I want my own zone alongside `cluster.local`" | Stub-domain |
+| "Platform team won't let me touch the main CoreDNS" | Per-pod `dnsConfig` |
+| "Homelab / bare-metal node IPs as DNS servers" | hostNetwork |
+| "Other clusters / LAN devices need to query us" | LoadBalancer (internal) |
+| "Public/external DNS authority" | LoadBalancer (public, **no recursion**) |
+
+See the [chart README](deploy/helm/coredns-crd/README.md) for the full values reference and hardening notes (NetworkPolicy, RBAC scoping).
 
 ## How it works
 
