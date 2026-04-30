@@ -64,3 +64,12 @@ k8s-app: kube-dns
 {{- define "coredns-crd.forwardEnabled" -}}
 {{- if include "coredns-crd.forwardUpstreams" . -}}true{{- end -}}
 {{- end -}}
+
+{{/*
+  kubernetesEnabled: returns "true" iff the Corefile should include the
+  kubernetes plugin block. Disabled in standalone installs (cluster's
+  existing CoreDNS owns cluster.local).
+*/}}
+{{- define "coredns-crd.kubernetesEnabled" -}}
+{{- if .Values.corefile.kubernetes.enabled -}}true{{- end -}}
+{{- end -}}

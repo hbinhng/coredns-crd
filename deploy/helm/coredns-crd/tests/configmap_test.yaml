@@ -51,3 +51,19 @@ tests:
       - matchRegex:
           path: data.Corefile
           pattern: '(?ms)forward\s+\.\s+1\.1\.1\.1\s+9\.9\.9\.9\s*\{'
+
+  - it: corefile.kubernetes.enabled=false suppresses the kubernetes block
+    set:
+      corefile.kubernetes.enabled: false
+    asserts:
+      - notMatchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s*kubernetes\s'
+
+  - it: corefile.kubernetes.enabled=false still emits the crd plugin
+    set:
+      corefile.kubernetes.enabled: false
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+crd\s*\{'

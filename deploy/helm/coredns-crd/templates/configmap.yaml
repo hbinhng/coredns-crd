@@ -38,7 +38,7 @@ data:
           }
           {{- end }}
         }
-        {{- if $.Values.corefile.kubernetes.enabled }}
+        {{- if include "coredns-crd.kubernetesEnabled" $ }}
         kubernetes {{ $.Values.corefile.kubernetes.cluster }} {{ join " " $.Values.corefile.kubernetes.fallthroughZones }} {
           pods {{ $.Values.corefile.kubernetes.pods }}
           fallthrough {{ join " " $.Values.corefile.kubernetes.fallthroughZones }}
