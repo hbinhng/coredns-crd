@@ -87,6 +87,10 @@ corefile:
     # Either set `upstreams` (list, preferred) OR `upstream` (string, legacy).
     # If `upstreams` is empty AND `upstream` is empty/null, the forward block
     # is omitted from the Corefile (authoritative-only behavior).
+    #
+    # CLI gotcha: `helm install --set corefile.forward.upstreams=[]` parses as
+    # the literal string "[]" and produces a broken Corefile. Use Helm's
+    # empty-list syntax instead: `--set corefile.forward.upstreams='{}'`.
     upstreams: []
     upstream: /etc/resolv.conf  # legacy single-string form, kept for back-compat
     maxConcurrent: 1000

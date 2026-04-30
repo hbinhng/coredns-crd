@@ -267,7 +267,7 @@ for method, scaling notes, and recommendations beyond ~50k records.
 Images and chart are signed with cosign keyless OIDC. To verify:
 
 ```
-cosign verify ghcr.io/hbinhng/coredns-crd:v0.1.0 \
+cosign verify ghcr.io/hbinhng/coredns-crd:v0.2.0 \
   --certificate-identity-regexp 'https://github.com/hbinhng/coredns-crd/.*' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com
 ```
