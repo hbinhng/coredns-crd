@@ -5,8 +5,8 @@ description: |
   Resolves DNSSlice records via a custom CoreDNS plugin and chains
   the standard kubernetes plugin for cluster.local resolution.
 type: application
-version: 0.1.0
-appVersion: "v0.1.0"
+version: 0.2.0
+appVersion: "v0.2.0"
 kubeVersion: ">=1.28.0-0"
 keywords: [dns, coredns, crd]
 home: https://github.com/hbinhng/coredns-crd

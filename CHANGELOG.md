@@ -6,6 +6,44 @@ All notable changes to this project are documented here. Format follows
 is governed by the CRD's `v1alpha1` designation: backwards-compatible
 additions only, no guarantee of stability across minor versions.
 
+## [0.2.0] — Unreleased
+
+### Added
+
+- Standalone deployment mode via `values-standalone.yaml` overlay:
+  the chart can now run side-by-side with the cluster's existing
+  CoreDNS as a declarative authoritative DNS server, rather than as
+  a tier-0 cluster-DNS replacement. The overlay disables the
+  `kubernetes` plugin and disables forwarding by default
+  (authoritative-only behavior).
+- `service.loadBalancer` values block — opt-in second Service of
+  type LoadBalancer for out-of-cluster DNS clients. Defaults to
+  `externalTrafficPolicy: Local` for source-IP preservation.
+- `hostNetwork.{enabled, dnsPolicy}` values — opt-in hostNetwork mode
+  so each node IP becomes a DNS server on `:53`. Requires the
+  existing `cap_net_bind_service+ep` setcap shipped in v0.1.0.
+- Public-LB recursion guard: `helm install` fails at render time when
+  `service.loadBalancer.enabled: true` is combined with non-empty
+  `corefile.forward.upstreams` and `corefile.forward.allowPublicRecursion`
+  is false. Prevents accidentally shipping an open recursive resolver.
+- `corefile.forward.upstreams` (list) — preferred replacement for the
+  legacy `corefile.forward.upstream` (string). The legacy field still
+  works via a back-compat helper.
+- helm-unittest test suite under `deploy/helm/coredns-crd/tests/`,
+  wired into CI. Locks default-install rendering as a regression
+  baseline and exercises every new gate.
+- README "Deployment modes" section with stub-domain integration
+  recipes for kubeadm, k3s, RKE2, and Talos.
+
+### Changed
+
+- The `forward .` block in the rendered Corefile is now conditional
+  on `corefile.forward.upstreams` (or legacy `upstream`) being
+  non-empty. Previously the block was unconditional, which would have
+  rendered an invalid Corefile if `upstream` was set to an empty string.
+
+[0.2.0]: https://github.com/hbinhng/coredns-crd/releases/tag/v0.2.0
+
 ## [0.1.0] — 2026-04-30
 
 Initial release.
