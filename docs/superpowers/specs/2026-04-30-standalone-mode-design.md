@@ -34,24 +34,74 @@ cluster component.
 
 ## Design
 
-### Mode umbrella value
+### Standalone install via values overlay (no `mode` value)
 
-A single top-level `mode: cluster-dns | standalone` value flips the
-defaults for the four sub-values that matter. Underlying values stay
-overridable so power users can mix-and-match.
+The chart ships a `values-standalone.yaml` overlay file alongside
+`values.yaml`. Standalone installs do:
 
-| Concern | `cluster-dns` (default, existing) | `standalone` (new) |
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  -f https://raw.githubusercontent.com/hbinhng/coredns-crd/main/deploy/helm/coredns-crd/values-standalone.yaml \
+  --set corefile.forward.upstreams='{}'   # optional, override anything
+```
+
+Or, if vendoring locally:
+
+```bash
+helm install coredns-crd ./deploy/helm/coredns-crd -f deploy/helm/coredns-crd/values-standalone.yaml
+```
+
+Why an overlay file instead of a `mode` umbrella value: Helm has no
+clean way to distinguish "user explicitly set this sub-value" from "user
+took the default," so a `mode`-driven default-flip ends up either
+breaking explicit sub-value overrides or requiring `hasKey` games and a
+canonical `values.yaml` that no longer documents what's tunable. The
+overlay-file pattern is the Helm-idiomatic answer (Bitnami,
+kube-prometheus, ingress-nginx all do this) and sidesteps the problem.
+
+`values-standalone.yaml` contents:
+
+```yaml
+# Standalone deployment: side-by-side with the cluster's existing
+# CoreDNS, treats coredns-crd as a declarative authoritative DNS server
+# rather than a tier-0 cluster component. See README "Deployment modes"
+# for ingress recipes.
+corefile:
+  kubernetes:
+    enabled: false
+  forward:
+    upstreams: []
+    # Set to a non-empty list to enable recursion. If you also enable
+    # service.loadBalancer below, you MUST set allowPublicRecursion: true
+    # to acknowledge the open-resolver risk.
+    allowPublicRecursion: false
+
+# Below are commented-out by default; uncomment whichever ingress path
+# you need.
+
+# service:
+#   loadBalancer:
+#     enabled: true
+#     externalTrafficPolicy: Local
+#     annotations:
+#       networking.gke.io/load-balancer-type: Internal
+
+# hostNetwork:
+#   enabled: true
+#   dnsPolicy: ClusterFirstWithHostNet
+```
+
+Underlying values stay overridable, so power users can mix-and-match.
+
+### What changes per install path
+
+| Concern | Default install (`values.yaml`) | Standalone install (`-f values-standalone.yaml`) |
 |---|---|---|
 | Corefile zone | `.:53` | `.:53` |
 | `kubernetes` plugin | enabled | disabled |
 | `forward` block | enabled (`/etc/resolv.conf`) | disabled by default; opt in via `corefile.forward.upstreams` |
 | Service `clusterIP` | empty (or pinned to kube-dns IP) | empty (auto-allocate) |
 | `fullnameOverride` | empty (or `kube-dns`) | empty |
-
-`mode` is a UX shortcut. It doesn't introduce new state — it just
-rewrites the defaults of values that already exist (or are added by this
-spec). Users can still set sub-values individually and override the mode's
-defaults.
 
 ### Plugin code
 
@@ -178,11 +228,11 @@ ergonomics cost of the explicit opt-in.
 
 ### Net-new chart additions
 
-1. `mode: cluster-dns | standalone` (default `cluster-dns`)
-2. `service.loadBalancer.{enabled, annotations, loadBalancerClass, externalTrafficPolicy, loadBalancerIP}`
-3. `hostNetwork.{enabled, dnsPolicy}`
-4. `corefile.forward.upstreams: []` (list) replaces `corefile.forward.upstream` (string). Back-compat helper in `_helpers.tpl` resolves the old string into the new list so existing values files keep working.
-5. `corefile.forward.allowPublicRecursion: false` (guard opt-out)
+1. `service.loadBalancer.{enabled, annotations, loadBalancerClass, externalTrafficPolicy, loadBalancerIP}` (default-disabled in `values.yaml`)
+2. `hostNetwork.{enabled, dnsPolicy}` (default-disabled in `values.yaml`)
+3. `corefile.forward.upstreams: []` (list) replaces `corefile.forward.upstream` (string). Back-compat helper in `_helpers.tpl` resolves the old string into the new list so existing values files keep working.
+4. `corefile.forward.allowPublicRecursion: false` (guard opt-out, default-disabled)
+5. New file: `deploy/helm/coredns-crd/values-standalone.yaml` — overlay file users pass to `helm install -f` to flip into standalone behavior.
 
 ### Template changes
 
@@ -198,8 +248,9 @@ ergonomics cost of the explicit opt-in.
 - **`_helpers.tpl`** — new helpers: `coredns-crd.kubernetesEnabled`,
   `coredns-crd.forwardEnabled`, `coredns-crd.forwardUpstreams`
   (back-compat resolver), `coredns-crd.publicLBRecursionGuard`.
-- **`NOTES.txt`** — emit the active mode + ingress recipe pointer for
-  the user's chosen Service type.
+- **`NOTES.txt`** — emit an ingress recipe pointer for the user's
+  chosen Service type. Detects standalone-shaped config from
+  `corefile.kubernetes.enabled: false` rather than a `mode` field.
 
 ### Documentation
 
@@ -229,11 +280,11 @@ New unit-test directory: `deploy/helm/coredns-crd/tests/`. Use
 plugin — the de-facto standard for chart-template testing). Wire into CI
 as a new step in the existing `test` job. Tests assert:
 
-1. `mode: cluster-dns` (default) renders Corefile *with* `kubernetes`
-   and *with* `forward .`.
-2. `mode: standalone` renders Corefile *without* `kubernetes` and
-   *without* `forward`.
-3. `mode: standalone` + `corefile.forward.upstreams: [1.1.1.1]` renders
+1. Default install (`values.yaml` only) renders Corefile *with*
+   `kubernetes` and *with* `forward . /etc/resolv.conf`.
+2. Standalone install (`-f values-standalone.yaml`) renders Corefile
+   *without* `kubernetes` and *without* `forward`.
+3. Standalone + `--set corefile.forward.upstreams='{1.1.1.1}'` renders
    `forward . 1.1.1.1`.
 4. `service.loadBalancer.enabled: true` renders a second Service of
    type LoadBalancer with `externalTrafficPolicy: Local` by default.
@@ -252,7 +303,7 @@ as a new step in the existing `test` job. Tests assert:
 Extend `test/e2e/run.sh` with a second test phase:
 
 - Install the chart a second time in `coredns-crd-standalone` namespace
-  with `mode: standalone, corefile.forward.upstreams: []`.
+  with `helm install ... -f deploy/helm/coredns-crd/values-standalone.yaml`.
 - Apply a DNSSlice for `foo.internal.lan A 10.0.0.1`.
 - Run a `dig` pod in the same namespace with
   `dnsConfig.nameservers: [<standalone ClusterIP>]` and resolve
@@ -279,25 +330,41 @@ coverage. Treat findings as gates, not suggestions. See
 ## Versioning
 
 `v0.2.0`. Minor bump — purely additive. Existing values files render
-identically (`mode` defaults to `cluster-dns`; the old
-`corefile.forward.upstream` string is preserved via back-compat helper).
+identically because `values.yaml` defaults are preserved and the old
+`corefile.forward.upstream` string is mapped through a back-compat
+helper.
 
 ## Migration
 
 `v0.1.x` users: nothing. Default behavior is preserved.
 
-`v0.2.0` users adopting standalone: documented values snippet:
+`v0.2.0` users adopting standalone:
+
+```bash
+helm install coredns-crd oci://ghcr.io/hbinhng/coredns-crd/charts/coredns-crd \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  --set service.loadBalancer.enabled=true \
+  --set 'service.loadBalancer.annotations.networking\.gke\.io/load-balancer-type=Internal'
+```
+
+Or with a local overrides file:
 
 ```yaml
-mode: standalone
+# my-values.yaml — passed AFTER values-standalone.yaml
 service:
   loadBalancer:
     enabled: true
     annotations:
       networking.gke.io/load-balancer-type: Internal
-# or:
+# or for hostNetwork:
 hostNetwork:
   enabled: true
+```
+
+```bash
+helm install coredns-crd ... \
+  -f deploy/helm/coredns-crd/values-standalone.yaml \
+  -f my-values.yaml
 ```
 
 ## Out of scope (deferred)
