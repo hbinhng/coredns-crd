@@ -1,0 +1,28 @@
+suite: back-compat (legacy values shapes)
+templates:
+  - configmap.yaml
+
+tests:
+  - it: legacy corefile.forward.upstream string still works (resolves to single-element upstreams)
+    set:
+      corefile.forward.upstream: /etc/resolv.conf
+      # Do NOT set corefile.forward.upstreams — back-compat path
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+forward\s+\.\s+/etc/resolv\.conf\s*\{'
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+max_concurrent\s+1000'
+
+  - it: legacy upstream string is overridden by explicit upstreams list
+    set:
+      corefile.forward.upstream: /etc/resolv.conf
+      corefile.forward.upstreams: [1.1.1.1]
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s+forward\s+\.\s+1\.1\.1\.1\s*\{'
+      - notMatchRegex:
+          path: data.Corefile
+          pattern: '/etc/resolv\.conf'

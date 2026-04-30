@@ -46,9 +46,11 @@ data:
         }
         {{- end }}
         prometheus {{ $.Values.corefile.prometheus.listen }}
-        forward . {{ $.Values.corefile.forward.upstream }} {
+        {{- if include "coredns-crd.forwardEnabled" $ }}
+        forward . {{ include "coredns-crd.forwardUpstreams" $ }} {
           max_concurrent {{ $.Values.corefile.forward.maxConcurrent }}
         }
+        {{- end }}
         cache {{ $.Values.corefile.cache.ttl }}
         {{- if $.Values.corefile.loop }}
         loop

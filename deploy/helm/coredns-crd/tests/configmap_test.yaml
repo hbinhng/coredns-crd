@@ -31,3 +31,23 @@ tests:
                 reload
                 loadbalance
             }
+
+  - it: empty corefile.forward.upstreams + empty upstream suppresses forward block
+    set:
+      corefile.forward.upstream: ""
+      corefile.forward.upstreams: []
+    asserts:
+      - notMatchRegex:
+          path: data.Corefile
+          pattern: '(?m)^\s*forward\s+\.'
+
+  - it: corefile.forward.upstreams renders multi-upstream forward block
+    set:
+      corefile.forward.upstream: ""
+      corefile.forward.upstreams:
+        - 1.1.1.1
+        - 9.9.9.9
+    asserts:
+      - matchRegex:
+          path: data.Corefile
+          pattern: '(?ms)forward\s+\.\s+1\.1\.1\.1\s+9\.9\.9\.9\s*\{'

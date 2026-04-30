@@ -66,8 +66,15 @@ corefile:
   prometheus:
     listen: ":9153"
   forward:
-    upstream: /etc/resolv.conf
+    # Either set `upstreams` (list, preferred) OR `upstream` (string, legacy).
+    # If `upstreams` is empty AND `upstream` is empty/null, the forward block
+    # is omitted from the Corefile (authoritative-only behavior).
+    upstreams: []
+    upstream: /etc/resolv.conf  # legacy single-string form, kept for back-compat
     maxConcurrent: 1000
+    # Public-LB recursion guard: must be true to combine upstreams with
+    # service.loadBalancer.enabled. See README "Deployment modes."
+    allowPublicRecursion: false
   cache:
     ttl: 30
   loop: true
